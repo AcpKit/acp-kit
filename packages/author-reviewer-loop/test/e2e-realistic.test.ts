@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runAuthorReviewerLoop } from '../lib/runtime/loop.mjs';
+import { createLoopEngine } from '../lib/engine.mjs';
 
 class FakeSession {
   private handlers: Record<string, (event: unknown) => void> = {};
@@ -142,4 +143,77 @@ describe('author-reviewer-loop realistic E2E', () => {
     await expect(fs.readFile(taskFile, 'utf8')).resolves.toBe('after');
     await fs.rm(cwd, { recursive: true, force: true });
   });
+
+  it('replays realistic streamed deltas through the real turn path without splitting words on screen', async () => {
+    class StreamingSession {
+      private handlers: Record<string, (event: unknown) => void> = {};
+
+      constructor(private readonly role: 'AUTHOR' | 'REVIEWER') {}
+
+      on(handlers: Record<string, (event: unknown) => void>) {
+        this.handlers = handlers;
+        return () => { this.handlers = {}; };
+      }
+
+      async prompt() {
+        if (this.role === 'AUTHOR') {
+          const events = [
+            { type: 'message.delta', sessionId: 'author', at: 1, messageId: 'a1', delta: 'he' },
+            { type: 'message.delta', sessionId: 'author', at: 2, messageId: 'a1', delta: 'llo' },
+            { type: 'message.delta', sessionId: 'author', at: 3, messageId: 'a1', delta: ' world' },
+            { type: 'reasoning.delta', sessionId: 'author', at: 4, reasoningId: 'r1', delta: 'itera' },
+            { type: 'reasoning.delta', sessionId: 'author', at: 5, reasoningId: 'r1', delta: 'tion' },
+            { type: 'reasoning.delta', sessionId: 'author', at: 6, reasoningId: 'r1', delta: ' plan' },
+            { type: 'turn.completed', sessionId: 'author', at: 7, turnId: 'author-turn', stopReason: 'end_turn' },
+          ];
+          for (const event of events) {
+            const key = String((event as { type?: string }).type || '').replace(/\.([a-z])/g, (_match, char: string) => char.toUpperCase());
+            this.handlers[key]?.(event);
+          }
+          return { stopReason: 'end_turn' };
+        }
+
+        this.handlers.messageCompleted?.({
+          type: 'message.completed',
+          sessionId: 'reviewer',
+          at: 8,
+          messageId: 'r1',
+          content: 'APPROVED\nReplay verified: hello world renders without split words.',
+        });
+        this.handlers.turnCompleted?.({ type: 'turn.completed', sessionId: 'reviewer', at: 9, turnId: 'reviewer-turn', stopReason: 'end_turn' });
+        return { stopReason: 'end_turn' };
+      }
+    }
+
+    const engine = createLoopEngine({
+      config: {
+        cwd: process.cwd(),
+        maxRounds: 1,
+        trace: false,
+        tui: false,
+        authorSettings: {
+          prompt: ({ round, feedback }: { round: number; feedback: string }) => `author round=${round}; feedback=${feedback || '<none>'}`,
+        },
+        reviewerSettings: {
+          prompt: ({ authorReply }: { authorReply: string }) => `review author=${authorReply}`,
+        },
+        openRole: async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => ({
+          role,
+          session: new StreamingSession(role),
+        }),
+        closeRole: async () => undefined,
+      },
+    });
+
+    const result = await engine.run();
+    const authorPane = engine.getState().rounds.get(1)?.AUTHOR;
+    const flowTexts = authorPane?.flow.map((item) => item.text) ?? [];
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(flowTexts).toContain('hello world');
+    expect(flowTexts).toContain('iteration plan');
+    expect(flowTexts.join('\n')).not.toContain('he llo');
+    expect(flowTexts.join('\n')).not.toContain('itera tion');
+  });
+
 });

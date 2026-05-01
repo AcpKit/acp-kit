@@ -226,6 +226,52 @@ function appendTextFlow(pane, delta, flowId, kind = 'text') {
   return { ...pane, flow };
 }
 
+const KNOWN_STANDALONE_BOUNDARY_WORDS = new Set([
+  'agent',
+  'agents',
+  'api',
+  'author',
+  'check',
+  'checks',
+  'continue',
+  'delta',
+  'deltas',
+  'feedback',
+  'file',
+  'files',
+  'fix',
+  'from',
+  'issue',
+  'issues',
+  'latest',
+  'loop',
+  'patch',
+  'plan',
+  'prompt',
+  'recovery',
+  'result',
+  'results',
+  'review',
+  'reviewer',
+  'round',
+  'run',
+  'session',
+  'sessions',
+  'spar',
+  'state',
+  'stream',
+  'streaming',
+  'task',
+  'test',
+  'tests',
+  'then',
+  'tool',
+  'tools',
+  'turn',
+  'turns',
+  'verify',
+]);
+
 function appendStreamText(previous, next) {
   if (!next) return previous || '';
   if (!previous) return next;
@@ -237,7 +283,10 @@ function appendStreamText(previous, next) {
     return previous + next;
   }
   if (/[A-Za-z]$/.test(previous) && /^[A-Za-z]/.test(next)) {
-    return looksLikeSplitWord(previous, next) ? previous + next : `${previous} ${next}`;
+    return hasPositiveWordBoundary(previous, next) ? `${previous} ${next}` : previous + next;
+  }
+  if (/[,:;!?]$/.test(previous) && /^[A-Za-z0-9]/.test(next)) {
+    return `${previous} ${next}`;
   }
   if (/[A-Za-z0-9)]$/.test(previous) && /^[(`]/.test(next)) {
     return previous + next;
@@ -245,19 +294,12 @@ function appendStreamText(previous, next) {
   return previous + next;
 }
 
-function looksLikeSplitWord(previous, next) {
-  const previousTail = previous.match(/([A-Za-z]+)$/)?.[1] ?? '';
-  const nextHead = next.match(/^([A-Za-z]+)/)?.[1] ?? '';
-  if (!previousTail || !nextHead) return false;
-  const previousTailLower = previousTail.toLowerCase();
-  const joinedLower = `${previousTail}${nextHead}`.toLowerCase();
-  if (/^(?:world|complete|websocket|websockets|webhook|webhooks|webview|webviews|webpack|website|websites|localhost|middleware|typescript|javascript|stylesheet|database|databases|filesystem|hostname|username|pathname|metadata|workspace|workspaces|endpoint|endpoints|callback|callbacks|backend|frontend|runtime|subprocess|codebase|codebases|tokens?|tooling)$/.test(joinedLower)) {
-    return true;
-  }
-  if (/^(?:un|re|dis|pre|sub|mis|de|over|under|out|co|non|semi|bi|tri|anti|auto|counter|hyper|infra|inter|macro|micro|multi|pseudo|super|tele|thermo|trans|ultra)$/i.test(previousTailLower)) {
-    return true;
-  }
-  return /^(?:socket|sockets|hook|hooks|view|views|pack|site|sites|host|name|path|point|points|base|bases|time|ware|script|style|sheet|system|space|spaces|tion|sion|ation|ition|ption|ction|ctions|tions|sions|mation|cation|fication|gation|lation|ration|mentation|umentation|ment|ments|ness|less|able|ible|ally|fully|ously|ingly|edly|ities|ality|istic|ology|graphy|scope|ship|hood|ward|wards|ized|ising|izing|ed|er|ers|est|ly|al|ial|ual|ive|ives|ize|ise|ous|ant|ent)$/i.test(nextHead);
+function hasPositiveWordBoundary(previous, next) {
+  const previousWord = previous.match(/(?:^|[^A-Za-z])([A-Za-z]+)$/)?.[1] ?? '';
+  const nextWord = next.match(/^([A-Za-z]+)(?:$|[^A-Za-z])/)?.[1] ?? '';
+  if (!previousWord || !nextWord) return false;
+  return KNOWN_STANDALONE_BOUNDARY_WORDS.has(previousWord.toLowerCase())
+    && KNOWN_STANDALONE_BOUNDARY_WORDS.has(nextWord.toLowerCase());
 }
 function suffixPrefixOverlap(left, right) {
   const max = Math.min(left.length, right.length);

@@ -262,6 +262,35 @@ describe('author-reviewer-loop state reducer', () => {
     ]);
   });
 
+  it('joins alphabetic chunks by default when the stream provides no boundary signal', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'he' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'llo' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'itera' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'tion' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'hello' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'iteration' },
+    ]);
+    expect(pane?.flow.some((item) => /he llo|itera tion/.test(item.text))).toBe(false);
+  });
+
+  it('uses explicit whitespace or punctuation as the boundary signal for separate words', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'run' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: ' tests' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan:' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'next' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'run tests' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'Plan: next' },
+    ]);
+  });
+
   it('deduplicates overlapping reasoning chunks', () => {
     let state = initialState();
     state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'read package' });
