@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   nodeChildProcessTransport: vi.fn((options: unknown) => ({ kind: 'transport', options })),
   runtime: {
     newSession: vi.fn(),
+    loadSession: vi.fn(),
     shutdown: vi.fn(),
   },
   session: {
@@ -65,6 +66,7 @@ describe('runtime role adapter', () => {
     mocks.createAcpRuntime.mockReset();
     mocks.nodeChildProcessTransport.mockClear();
     mocks.runtime.newSession.mockReset();
+    mocks.runtime.loadSession.mockReset();
     mocks.runtime.shutdown.mockReset();
     mocks.session.setModel.mockReset();
     mocks.session.close.mockReset();
@@ -86,6 +88,7 @@ describe('runtime role adapter', () => {
     });
     mocks.createAcpRuntime.mockReturnValue(mocks.runtime);
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
+    mocks.runtime.loadSession.mockResolvedValue(mocks.session);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
     mocks.session.close.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
@@ -161,6 +164,54 @@ describe('runtime role adapter', () => {
       kind: 'transport',
       options: { useLoginShell: process.platform !== 'win32' },
     });
+
+    await state.close();
+  });
+
+  it('resumes a saved ACP session when recovery metadata provides a session id', async () => {
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      recovery: { sessionId: 'saved-session', turnsOnActiveSession: 3 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.runtime.loadSession).toHaveBeenCalledWith({ sessionId: 'saved-session', cwd: path.resolve(process.cwd()) });
+    expect(mocks.runtime.newSession).not.toHaveBeenCalled();
+    expect(state.recovery).toMatchObject({ resumed: true, requestedSessionId: 'saved-session', turnsOnActiveSession: 3 });
+
+    await state.close();
+  });
+
+  it('falls back to a fresh ACP session when a saved session cannot be resumed', async () => {
+    const onRoleStatus = vi.fn();
+    mocks.runtime.loadSession.mockRejectedValueOnce(new Error('session not found'));
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'stale-session', turnsOnActiveSession: 9 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.runtime.loadSession).toHaveBeenCalledWith({ sessionId: 'stale-session', cwd: path.resolve(process.cwd()) });
+    expect(mocks.runtime.newSession).toHaveBeenCalledWith({ cwd: path.resolve(process.cwd()) });
+    expect(onRoleStatus).toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+    expect(state.recovery).toMatchObject({ resumed: false, requestedSessionId: 'stale-session', turnsOnActiveSession: 0 });
 
     await state.close();
   });

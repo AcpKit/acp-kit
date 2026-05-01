@@ -3,28 +3,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  createSessionTraceId,
-  createSessionTraceRecorder,
-  formatSessionTraceEntry,
-  sessionTraceDirectory,
-  sessionTraceFilePath,
-  sessionTracingEnabled,
+  createRunTraceId,
+  createRunTraceRecorder,
+  formatRunTraceEntry,
+  runTraceDirectory,
+  runTraceFilePath,
+  runTraceEnabled,
   sparDataDir,
-} from '../lib/runtime/session-trace.mjs';
+} from '../lib/runtime/run-trace.mjs';
 
-describe('Spar session trace persistence', () => {
+describe('Spar run trace persistence', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('stores session traces under the ACP Kit Spar directory', () => {
+  it('stores run traces under the ACP Kit Spar directory', () => {
     expect(sparDataDir({ home: '/tmp/spar-home' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar'));
-    expect(sessionTraceDirectory({ home: '/tmp/spar-home' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar', 'traces'));
-    expect(sessionTraceFilePath({ home: '/tmp/spar-home', sessionId: 'session-1' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar', 'traces', 'session-1.jsonl'));
+    expect(runTraceDirectory({ home: '/tmp/spar-home' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar', 'run-traces'));
+    expect(runTraceFilePath({ home: '/tmp/spar-home', runTraceId: 'run-trace-1' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar', 'run-traces', 'run-trace-1.jsonl'));
   });
 
-  it('creates stable timestamped session ids without path separators', () => {
-    const id = createSessionTraceId({ now: () => Date.UTC(2026, 4, 2, 3, 4, 5, 6), random: () => 0.5, pid: 42 });
+  it('creates stable timestamped run trace ids without path separators', () => {
+    const id = createRunTraceId({ now: () => Date.UTC(2026, 4, 2, 3, 4, 5, 6), random: () => 0.5, pid: 42 });
 
     expect(id).toBe('2026-05-02T03-04-05-006Z-42-800000');
     expect(id).not.toContain(path.sep);
@@ -32,22 +32,22 @@ describe('Spar session trace persistence', () => {
 
   it('defaults off under Vitest unless explicitly enabled', () => {
     vi.stubEnv('VITEST', 'true');
-    vi.stubEnv('SPAR_SESSION_TRACE', '');
-    expect(sessionTracingEnabled()).toBe(false);
+    vi.stubEnv('SPAR_RUN_TRACE', '');
+    expect(runTraceEnabled()).toBe(false);
 
-    vi.stubEnv('SPAR_SESSION_TRACE', '1');
-    expect(sessionTracingEnabled()).toBe(true);
+    vi.stubEnv('SPAR_RUN_TRACE', '1');
+    expect(runTraceEnabled()).toBe(true);
 
-    vi.stubEnv('SPAR_SESSION_TRACE', 'off');
-    expect(sessionTracingEnabled()).toBe(false);
+    vi.stubEnv('SPAR_RUN_TRACE', 'off');
+    expect(runTraceEnabled()).toBe(false);
   });
 
-  it('writes a complete JSONL session with start, events, and end', () => {
+  it('writes a complete JSONL run trace with start, events, and end', () => {
     const lines: string[] = [];
-    const recorder = createSessionTraceRecorder({
+    const recorder = createRunTraceRecorder({
       enabled: true,
       cwd: '/workspace/project',
-      sessionId: 'session-1',
+      runTraceId: 'run-trace-1',
       now: (() => {
         let at = 1000;
         return () => at += 5;
@@ -70,18 +70,18 @@ describe('Spar session trace persistence', () => {
     recorder.close({ status: 'completed', result: { approved: true, rounds: 1 } });
 
     const entries = lines.map((line) => JSON.parse(line));
-    expect(entries.map((entry) => entry.type)).toEqual(['sessionStart', 'event', 'sessionEnd']);
-    expect(entries[0]).toMatchObject({ sessionId: 'session-1', cwd: '/workspace/project', config: { tui: true, author: { agent: 'codex' } } });
+    expect(entries.map((entry) => entry.type)).toEqual(['runStart', 'event', 'runEnd']);
+    expect(entries[0]).toMatchObject({ runTraceId: 'run-trace-1', cwd: '/workspace/project', config: { tui: true, author: { agent: 'codex' } } });
     expect(entries[1]).toMatchObject({ event: { type: 'traceEntry', role: 'AUTHOR' }, action: { traceId: 1 } });
     expect(entries[2]).toMatchObject({ status: 'completed', result: { approved: true, rounds: 1 } });
   });
 
   it('writes JSONL trace files and creates parent directories', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spar-session-trace-'));
-    const recorder = createSessionTraceRecorder({
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spar-run-trace-'));
+    const recorder = createRunTraceRecorder({
       enabled: true,
       home,
-      sessionId: 'session-file',
+      runTraceId: 'run-trace-file',
       cwd: '/workspace/project',
       config: { cwd: '/workspace/project' },
     });
@@ -89,15 +89,15 @@ describe('Spar session trace persistence', () => {
     recorder.record('event', { event: { type: 'launching' } });
     recorder.close({ status: 'completed' });
 
-    const filePath = sessionTraceFilePath({ home, sessionId: 'session-file' });
+    const filePath = runTraceFilePath({ home, runTraceId: 'run-trace-file' });
     const entries = fs.readFileSync(filePath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    expect(entries.map((entry) => entry.type)).toEqual(['sessionStart', 'event', 'sessionEnd']);
+    expect(entries.map((entry) => entry.type)).toEqual(['runStart', 'event', 'runEnd']);
   });
 
   it('bounds oversized trace entries instead of writing unbounded JSON', () => {
-    const line = formatSessionTraceEntry({
+    const line = formatRunTraceEntry({
       type: 'event',
-      sessionId: 'session-1',
+      runTraceId: 'run-trace-1',
       at: 1,
       event: { type: 'traceEntry', frame: 'x'.repeat(200) },
       action: { type: 'traceEntry' },
@@ -106,7 +106,7 @@ describe('Spar session trace persistence', () => {
     const entry = JSON.parse(line);
     expect(entry).toMatchObject({
       type: 'event',
-      sessionId: 'session-1',
+      runTraceId: 'run-trace-1',
       omitted: true,
       eventType: 'traceEntry',
       actionType: 'traceEntry',
@@ -115,9 +115,9 @@ describe('Spar session trace persistence', () => {
   });
 
   it('swallows writer failures because tracing is diagnostic-only', () => {
-    const recorder = createSessionTraceRecorder({
+    const recorder = createRunTraceRecorder({
       enabled: true,
-      sessionId: 'session-1',
+      runTraceId: 'run-trace-1',
       writeLine: () => { throw new Error('disk full'); },
     });
 

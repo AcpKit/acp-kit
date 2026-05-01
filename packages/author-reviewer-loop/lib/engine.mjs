@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import { PaneStatus, Phase, initialState, reduce } from './engine/state.mjs';
 import { closeRole, openRole } from './runtime/role.mjs';
+import { createInitialRunRecoveryState, createRunRecoveryStore } from './runtime/run-recovery.mjs';
+import { createSparSessionStore } from './runtime/spar-session.mjs';
 import { createStartupProfiler } from './runtime/startup-profile.mjs';
-import { createSessionTraceRecorder } from './runtime/session-trace.mjs';
+import { createRunTraceRecorder } from './runtime/run-trace.mjs';
 import { runTurn } from './runtime/turn.mjs';
 
 export { PaneStatus, Phase };
@@ -114,7 +116,10 @@ export function createLoopEngine({ config }) {
   const eventListeners = new Set();
   let nextFlowId = 1;
   let nextTraceId = 1;
-  let sessionTrace = null;
+  let runTrace = null;
+  const sparSessionStore = config.sparSession?.store || createSparSessionStore({ ...(config.sparSession || {}), config });
+  const recoveryStore = config.runRecovery?.store || createRunRecoveryStore({ ...(config.runRecovery || {}), config });
+  let recoveryState = recoveryStore.load?.() || createInitialRunRecoveryState(config);
 
   function dispatch(action) {
     state = reduce(state, action);
@@ -127,7 +132,7 @@ export function createLoopEngine({ config }) {
 
   const publish = (event, action = event) => {
     if (action) dispatch(action);
-    sessionTrace?.record('event', { event, action });
+    runTrace?.record('event', { event, action });
     emit(event);
   };
 
@@ -189,10 +194,25 @@ export function createLoopEngine({ config }) {
     onResult: (result) => publish({ type: 'result', result }, { type: 'result', result }),
   };
 
+  function writeRecovery(nextState) {
+    recoveryState = cloneJson(nextState);
+    recoveryStore.write?.(recoveryState);
+  }
+
+  function updateRecovery(update) {
+    const nextState = cloneJson(recoveryState);
+    update(nextState);
+    writeRecovery(nextState);
+  }
+
+  function clearRecovery() {
+    recoveryStore.clear?.();
+  }
+
   async function run() {
     const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
-    sessionTrace = createSessionTraceRecorder({ ...(config.sessionTrace || {}), cwd, config });
-    const captureTrace = Boolean(trace || tui || sessionTrace.enabled);
+    runTrace = createRunTraceRecorder({ ...(config.runTrace || {}), cwd, config });
+    const captureTrace = Boolean(trace || tui || runTrace.enabled);
     const openRoleFn = config.openRole || openRole;
     const closeRoleFn = config.closeRole || closeRole;
     const retiredRoles = new Set();
@@ -204,6 +224,8 @@ export function createLoopEngine({ config }) {
     let runError;
     try {
       await fs.mkdir(cwd, { recursive: true });
+      sparSessionStore.start?.();
+      writeRecovery(recoveryState);
       innerRenderer.onLaunching();
       startup = startRoles({
         authorSettings,
@@ -212,6 +234,7 @@ export function createLoopEngine({ config }) {
         trace,
         captureTrace,
         renderer: innerRenderer,
+        recoveryState,
         openRole: openRoleFn,
       });
       authorManager = createRoleSessionManager({
@@ -225,6 +248,7 @@ export function createLoopEngine({ config }) {
         captureTrace,
         renderer: innerRenderer,
         maxTurns: authorSettings.sessionTurns,
+        recovery: recoveryState.roles?.AUTHOR,
         retiredRoles,
       });
       reviewerManager = createRoleSessionManager({
@@ -238,6 +262,7 @@ export function createLoopEngine({ config }) {
         captureTrace,
         renderer: innerRenderer,
         maxTurns: reviewerSettings.sessionTurns,
+        recovery: recoveryState.roles?.REVIEWER,
         retiredRoles,
       });
 
@@ -249,13 +274,19 @@ export function createLoopEngine({ config }) {
         config,
         authorSettings,
         reviewerSettings,
+        recoveryState,
+        updateRecovery,
+        clearRecovery,
         renderer: innerRenderer,
       });
     } catch (error) {
       runError = await normalizeStartupError({ startup, author: authorManager?.getActive(), error });
       const message = formatErrorMessage(runError);
+      updateRecovery((nextState) => {
+        nextState.loop.error = message;
+      });
       dispatch({ type: 'error', error: message });
-      sessionTrace?.record('event', {
+      runTrace?.record('event', {
         event: { type: 'error', error: runError },
         action: { type: 'error', error: message },
       });
@@ -282,7 +313,8 @@ export function createLoopEngine({ config }) {
       )
       : runError || closeError;
     if (finalError) {
-      sessionTrace?.close({
+      sparSessionStore.fail?.(finalError);
+      runTrace?.close({
         status: 'failed',
         error: finalError,
         runError,
@@ -290,7 +322,8 @@ export function createLoopEngine({ config }) {
         finalState: summarizeFinalState(state),
       });
     } else {
-      sessionTrace?.close({
+      sparSessionStore.complete?.(result);
+      runTrace?.close({
         status: 'completed',
         result,
         finalState: summarizeFinalState(state),
@@ -315,65 +348,121 @@ export function createLoopEngine({ config }) {
   };
 }
 
-async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, config, authorSettings, reviewerSettings, renderer }) {
+async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, config, authorSettings, reviewerSettings, recoveryState, updateRecovery, clearRecovery, renderer }) {
   maxRounds = normalizeRoundLimit(maxRounds);
-  let feedback = '';
+  let feedback = typeof recoveryState?.loop?.feedback === 'string' ? recoveryState.loop.feedback : '';
   let approved = false;
-  let lastRound = 0;
-  let roundLimit = maxRounds;
-  let approvalContinuations = 0;
+  let lastRound = Math.max(0, Number(recoveryState?.loop?.pending?.round) - 1 || 0);
+  let roundLimit = normalizeRoundLimit(recoveryState?.loop?.roundLimit ?? maxRounds);
+  let approvalContinuations = normalizeApprovalContinuationLimit(recoveryState?.loop?.approvalContinuations, 0);
+  let pending = normalizePendingRecovery(recoveryState?.loop?.pending);
   const continuationLimit = normalizeApprovalContinuationLimit(config.maxApprovalContinuations, maxRounds);
   const hardRoundLimit = maxRounds + continuationLimit;
 
-  for (let round = 1; round <= roundLimit; round++) {
+  for (let round = pending.round; round <= roundLimit; round++) {
     lastRound = round;
-    const author = await authorManager.getForTurn();
-    const authorReply = await runTurn({
-      round,
-      role: 'AUTHOR',
-      state: author,
-      prompt: authorSettings.prompt({ round, feedback }),
-      renderer,
-    });
+    if (pending.type === 'approval-decision' && pending.round === round) {
+      const approvedResult = pending.result;
+      const resumedResult = await settleApprovedResult({
+        result: approvedResult,
+        round,
+        hardRoundLimit,
+        continuationLimit,
+        approvalContinuations,
+        roundLimit,
+        config,
+        maxRounds,
+        clearRecovery,
+        updateRecovery,
+        renderer,
+      });
+      if (resumedResult.done) return resumedResult.result;
+      ({ approved, feedback, approvalContinuations, roundLimit, pending } = resumedResult);
+      continue;
+    }
+
+    let authorReply;
+    if (pending.type === 'reviewer-turn' && pending.round === round && typeof pending.authorReply === 'string') {
+      authorReply = pending.authorReply;
+    } else {
+      const author = await authorManager.getForTurn();
+      updateRecovery((nextState) => {
+        writeRoleRecovery(nextState, authorManager, reviewerManager);
+        nextState.loop.roundLimit = roundLimit;
+        nextState.loop.approvalContinuations = approvalContinuations;
+        nextState.loop.feedback = feedback;
+        nextState.loop.pending = { type: 'author-turn', round, started: true };
+        delete nextState.loop.error;
+      });
+      authorReply = await runTurn({
+        round,
+        role: 'AUTHOR',
+        state: author,
+        prompt: authorSettings.prompt({ round, feedback }),
+        renderer,
+      });
+    }
+
     const reviewer = await reviewerManager.getForTurn();
+    updateRecovery((nextState) => {
+      writeRoleRecovery(nextState, authorManager, reviewerManager);
+      nextState.loop.roundLimit = roundLimit;
+      nextState.loop.approvalContinuations = approvalContinuations;
+      nextState.loop.feedback = feedback;
+      nextState.loop.pending = { type: 'reviewer-turn', round, started: true, authorReply };
+      delete nextState.loop.error;
+    });
     const reply = await runTurn({
       round,
       role: 'REVIEWER',
       state: reviewer,
       prompt: reviewerSettings.prompt({ round, feedback, authorReply }),
       renderer,
-      });
+    });
 
-      ({ approved, feedback } = interpretReviewerReply(reply));
-    if (!approved) continue;
+    ({ approved, feedback } = interpretReviewerReply(reply));
+    if (!approved) {
+      pending = { type: 'author-turn', round: round + 1, started: false };
+      updateRecovery((nextState) => {
+        writeRoleRecovery(nextState, authorManager, reviewerManager);
+        nextState.loop.roundLimit = roundLimit;
+        nextState.loop.approvalContinuations = approvalContinuations;
+        nextState.loop.feedback = feedback;
+        nextState.loop.pending = pending;
+        delete nextState.loop.error;
+      });
+      continue;
+    }
 
     const result = { approved: true, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
-    if (config.onApproved) renderer.onApprovalPending(result);
-    const decision = await config.onApproved?.(result);
-    if (!decision?.continue) {
-      renderer.onResult(result);
-      return result;
-    }
+    updateRecovery((nextState) => {
+      writeRoleRecovery(nextState, authorManager, reviewerManager);
+      nextState.loop.roundLimit = roundLimit;
+      nextState.loop.approvalContinuations = approvalContinuations;
+      nextState.loop.feedback = feedback;
+      nextState.loop.pending = { type: 'approval-decision', round, started: true, result };
+      delete nextState.loop.error;
+    });
 
-    if (approvalContinuations >= continuationLimit || round >= hardRoundLimit) {
-      const cappedResult = {
-        ...result,
-        maxRounds: hardRoundLimit,
-        continuationLimitReached: true,
-        feedback: `${feedback}\n\nApproval continuation limit reached after ${approvalContinuations} continuation(s).`,
-      };
-      renderer.onResult(cappedResult);
-      return cappedResult;
-    }
-
-    approvalContinuations += 1;
-    approved = false;
-    if (round === roundLimit) roundLimit = Math.min(roundLimit + 1, hardRoundLimit);
-    feedback = decision.feedback || `The task changed after approval. Continue with the updated task:\n${config.task}`;
-    renderer.onApprovalContinued?.({ round, feedback });
+    const approvalResult = await settleApprovedResult({
+      result,
+      round,
+      hardRoundLimit,
+      continuationLimit,
+      approvalContinuations,
+      roundLimit,
+      config,
+      maxRounds,
+      clearRecovery,
+      updateRecovery,
+      renderer,
+    });
+    if (approvalResult.done) return approvalResult.result;
+    ({ approved, feedback, approvalContinuations, roundLimit, pending } = approvalResult);
   }
 
   const result = { approved, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
+  clearRecovery();
   renderer.onResult(result);
   return result;
 }
@@ -400,7 +489,7 @@ function normalizeApprovalContinuationLimit(value, fallback) {
   return fallback;
 }
 
-function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace, renderer, openRole: openRoleFn = openRole }) {
+function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace, renderer, recoveryState, openRole: openRoleFn = openRole }) {
   const startupProfile = createStartupProfiler({ scope: 'loop-startup' });
   let author;
   let reviewer;
@@ -415,7 +504,7 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
   }
 
   const authorPromise = Promise.resolve()
-    .then(() => openRoleFn({ role: 'AUTHOR', settings: authorSettings, cwd, trace, captureTrace, renderer }))
+    .then(() => openRoleFn({ role: 'AUTHOR', settings: authorSettings, cwd, trace, captureTrace, renderer, recovery: recoveryState?.roles?.AUTHOR }))
     .then((state) => {
       author = state;
       authorSettled = true;
@@ -429,7 +518,7 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
     });
 
   const reviewerPromise = Promise.resolve()
-    .then(() => openRoleFn({ role: 'REVIEWER', settings: reviewerSettings, cwd, trace, captureTrace, renderer }))
+    .then(() => openRoleFn({ role: 'REVIEWER', settings: reviewerSettings, cwd, trace, captureTrace, renderer, recovery: recoveryState?.roles?.REVIEWER }))
     .then((state) => {
       reviewer = state;
       reviewerSettled = true;
@@ -491,7 +580,7 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
   };
 }
 
-function createRoleSessionManager({ role, settings, getInitialRole, openRole: openRoleFn, closeRole: closeRoleFn, cwd, trace, captureTrace, renderer, maxTurns, retiredRoles }) {
+function createRoleSessionManager({ role, settings, getInitialRole, openRole: openRoleFn, closeRole: closeRoleFn, cwd, trace, captureTrace, renderer, maxTurns, recovery, retiredRoles }) {
   const turnLimit = normalizeSessionTurnLimit(maxTurns);
   const startedRoles = new Set();
   let active = null;
@@ -509,7 +598,7 @@ function createRoleSessionManager({ role, settings, getInitialRole, openRole: op
     active = initialConsumed ? await openFreshRole() : await getInitialRole();
     initialConsumed = true;
     startedRoles.add(active);
-    turnsOnActiveSession = 0;
+    turnsOnActiveSession = Math.max(0, Number(active?.recovery?.turnsOnActiveSession) || Number(recovery?.turnsOnActiveSession) || 0);
     return active;
   }
 
@@ -540,7 +629,90 @@ function createRoleSessionManager({ role, settings, getInitialRole, openRole: op
     getStartedRoles() {
       return Array.from(startedRoles);
     },
+    getRecoverySnapshot() {
+      if (!active?.session?.sessionId) return null;
+      return {
+        sessionId: active.session.sessionId,
+        turnsOnActiveSession,
+      };
+    },
   };
+}
+
+async function settleApprovedResult({ result, round, hardRoundLimit, continuationLimit, approvalContinuations, roundLimit, config, maxRounds, clearRecovery, updateRecovery, renderer }) {
+  if (config.onApproved) renderer.onApprovalPending(result);
+  const decision = await config.onApproved?.(result);
+  if (!decision?.continue) {
+    clearRecovery();
+    renderer.onResult(result);
+    return { done: true, result };
+  }
+
+  if (approvalContinuations >= continuationLimit || round >= hardRoundLimit) {
+    const cappedResult = {
+      ...result,
+      maxRounds: hardRoundLimit,
+      continuationLimitReached: true,
+      feedback: `${result.feedback}\n\nApproval continuation limit reached after ${approvalContinuations} continuation(s).`,
+    };
+    clearRecovery();
+    renderer.onResult(cappedResult);
+    return { done: true, result: cappedResult };
+  }
+
+  const nextApprovalContinuations = approvalContinuations + 1;
+  const nextRoundLimit = round === roundLimit ? Math.min(roundLimit + 1, hardRoundLimit) : roundLimit;
+  const nextFeedback = decision.feedback || `The task changed after approval. Continue with the updated task:\n${config.task}`;
+  const nextPending = { type: 'author-turn', round: round + 1, started: false };
+  renderer.onApprovalContinued?.({ round, feedback: nextFeedback });
+  updateRecovery((nextState) => {
+    nextState.loop.roundLimit = nextRoundLimit;
+    nextState.loop.approvalContinuations = nextApprovalContinuations;
+    nextState.loop.feedback = nextFeedback;
+    nextState.loop.pending = nextPending;
+    delete nextState.loop.error;
+  });
+  return {
+    done: false,
+    approved: false,
+    feedback: nextFeedback,
+    approvalContinuations: nextApprovalContinuations,
+    roundLimit: nextRoundLimit,
+    pending: nextPending,
+  };
+}
+
+function writeRoleRecovery(nextState, authorManager, reviewerManager) {
+  nextState.roles = nextState.roles || {};
+  assignRoleRecovery(nextState.roles, 'AUTHOR', authorManager?.getRecoverySnapshot?.());
+  assignRoleRecovery(nextState.roles, 'REVIEWER', reviewerManager?.getRecoverySnapshot?.());
+}
+
+function assignRoleRecovery(target, role, snapshot) {
+  if (!snapshot?.sessionId) {
+    delete target[role];
+    return;
+  }
+  target[role] = {
+    sessionId: snapshot.sessionId,
+    turnsOnActiveSession: Math.max(0, Number(snapshot.turnsOnActiveSession) || 0),
+  };
+}
+
+function normalizePendingRecovery(value) {
+  if (!value || typeof value !== 'object') return { type: 'author-turn', round: 1, started: false };
+  if (!['author-turn', 'reviewer-turn', 'approval-decision'].includes(value.type)) {
+    return { type: 'author-turn', round: 1, started: false };
+  }
+  return {
+    ...value,
+    round: Number.isInteger(value.round) && value.round >= 1 ? value.round : 1,
+    started: Boolean(value.started),
+  };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function normalizeSessionTurnLimit(value) {

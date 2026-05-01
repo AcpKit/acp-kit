@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +24,7 @@ vi.mock('../lib/runtime/turn.mjs', () => ({
 }));
 
 const { createLoopEngine } = await import('../lib/engine.mjs');
+const { createRunRecoveryStore } = await import('../lib/runtime/run-recovery.mjs');
 
 function config(maxRounds = 2) {
   return {
@@ -73,11 +77,11 @@ describe('author-reviewer-loop engine', () => {
 
   it('refreshes author and reviewer sessions independently after their configured turn limits', async () => {
     const authorStates = [
-      { role: 'AUTHOR', session: { id: 'author-session-1' } },
+      { role: 'AUTHOR', session: { id: 'author-run-trace-1' } },
       { role: 'AUTHOR', session: { id: 'author-session-2' } },
     ];
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-3' } },
     ];
@@ -212,7 +216,7 @@ describe('author-reviewer-loop engine', () => {
   it('accepts APPROVED replies with clean negated issue summaries instead of looping unnecessarily', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     let reviewerIndex = 0;
@@ -238,7 +242,7 @@ describe('author-reviewer-loop engine', () => {
   it('accepts clean issue-none summaries with trailing prose after APPROVED', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     let reviewerIndex = 0;
@@ -261,7 +265,7 @@ describe('author-reviewer-loop engine', () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     let reviewerIndex = 0;
@@ -481,15 +485,15 @@ describe('author-reviewer-loop engine', () => {
     expect(secondAuthorPrompt).toContain('treated as NOT APPROVED because it mixed APPROVED with conflicting issue text');
   });
 
-  it('captures and persists run events as a local session trace', async () => {
+  it('captures and persists run events as a local run trace', async () => {
     const lines: string[] = [];
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     const cfg = {
       ...config(1),
-      sessionTrace: {
+      runTrace: {
         enabled: true,
-        sessionId: 'test-session',
+        runTraceId: 'test-run-trace',
         now: (() => {
           let at = 1000;
           return () => at += 1;
@@ -513,20 +517,20 @@ describe('author-reviewer-loop engine', () => {
 
     expect(result).toMatchObject({ approved: true, rounds: 1 });
     const entries = lines.map((line) => JSON.parse(line));
-    expect(entries.at(0)).toMatchObject({ type: 'sessionStart', sessionId: 'test-session' });
+    expect(entries.at(0)).toMatchObject({ type: 'runStart', runTraceId: 'test-run-trace' });
     expect(entries.some((entry) => entry.event?.type === 'traceEntry' && entry.event.entry.frame === 'author-wire')).toBe(true);
     expect(entries.some((entry) => entry.event?.type === 'toolStart' && entry.event.toolCallId === 'tool-1')).toBe(true);
-    expect(entries.at(-1)).toMatchObject({ type: 'sessionEnd', status: 'completed', result: { approved: true, rounds: 1 } });
+    expect(entries.at(-1)).toMatchObject({ type: 'runEnd', status: 'completed', result: { approved: true, rounds: 1 } });
   });
 
-  it('closes session traces with failed status when the run fails', async () => {
+  it('closes run traces with failed status when the run fails', async () => {
     const lines: string[] = [];
     const failure = new Error('author crashed');
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     const cfg = {
       ...config(1),
-      sessionTrace: { enabled: true, sessionId: 'failed-session', writeLine: (line: string) => lines.push(line) },
+      runTrace: { enabled: true, runTraceId: 'failed-run-trace', writeLine: (line: string) => lines.push(line) },
     };
     mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
       role === 'AUTHOR' ? authorState : reviewerState,
@@ -541,17 +545,17 @@ describe('author-reviewer-loop engine', () => {
     const entries = lines.map((line) => JSON.parse(line));
     expect(entries.some((entry) => entry.event?.type === 'error' && entry.event.error.message === 'author crashed')).toBe(true);
     expect(entries.at(-1)).toMatchObject({
-      type: 'sessionEnd',
+      type: 'runEnd',
       status: 'failed',
       error: { message: 'author crashed' },
       finalState: { hasError: true },
     });
   });
 
-  it('captures wire traces when session trace persistence is enabled even when TUI and trace logging are disabled', async () => {
+  it('captures wire traces when run trace persistence is enabled even when TUI and trace logging are disabled', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
-    const cfg = { ...config(1), tui: false, trace: false, sessionTrace: { enabled: true, writeLine: () => {} } };
+    const cfg = { ...config(1), tui: false, trace: false, runTrace: { enabled: true, writeLine: () => {} } };
     mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
       role === 'AUTHOR' ? authorState : reviewerState,
     );
@@ -920,7 +924,7 @@ describe('author-reviewer-loop engine', () => {
   it('continues with the same sessions when approval is reopened by an edited task', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     const cfg = config(2) as ReturnType<typeof config> & {
@@ -961,7 +965,7 @@ describe('author-reviewer-loop engine', () => {
   it('continues with the same sessions when approval is force-continued', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     const cfg = config(1) as ReturnType<typeof config> & {
@@ -995,11 +999,11 @@ describe('author-reviewer-loop engine', () => {
 
   it('refreshes sessions on an approval continuation when session turn limits are exhausted', async () => {
     const authorStates = [
-      { role: 'AUTHOR', session: { id: 'author-session-1' } },
+      { role: 'AUTHOR', session: { id: 'author-run-trace-1' } },
       { role: 'AUTHOR', session: { id: 'author-session-2' } },
     ];
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     const cfg = config(1) as ReturnType<typeof config> & {
@@ -1246,7 +1250,7 @@ describe('author-reviewer-loop engine', () => {
   it('normalizes a fractional maxRounds config before deciding how many rounds to run', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     let reviewerIndex = 0;
@@ -1288,7 +1292,7 @@ describe('author-reviewer-loop engine', () => {
   it('falls back to the normalized base round budget when maxApprovalContinuations is fractional', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-3' } },
     ];
@@ -1317,7 +1321,7 @@ describe('author-reviewer-loop engine', () => {
   it('falls back to the normalized base round budget when maxApprovalContinuations is negative', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerStates = [
-      { role: 'REVIEWER', session: { id: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-run-trace-1' } },
       { role: 'REVIEWER', session: { id: 'reviewer-session-2' } },
     ];
     let reviewerIndex = 0;
@@ -1341,4 +1345,299 @@ describe('author-reviewer-loop engine', () => {
     expect(cfg.onApproved).toHaveBeenCalledTimes(2);
     expect(mocks.runTurn).toHaveBeenCalledTimes(4);
   });
+
+  it('resumes from a saved pending reviewer turn without rerunning the author turn', async () => {
+    const authorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-session', sessionId: 'author-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 1 },
+    };
+    const reviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session', sessionId: 'reviewer-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 0 },
+    };
+    const store = {
+      load: vi.fn().mockReturnValue({
+        version: 1,
+        identity: {},
+        identityHash: 'x',
+        updatedAt: 1,
+        loop: {
+          roundLimit: 3,
+          approvalContinuations: 0,
+          feedback: '1. Missing persistence.',
+          pending: {
+            type: 'reviewer-turn',
+            round: 2,
+            started: true,
+            authorReply: 'Implemented persistence and targeted restart tests.',
+          },
+        },
+        roles: {
+          AUTHOR: { sessionId: 'author-session', turnsOnActiveSession: 1 },
+          REVIEWER: { sessionId: 'reviewer-session', turnsOnActiveSession: 0 },
+        },
+      }),
+      write: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    mocks.openRole.mockImplementation(async ({ role, recovery }: { role: 'AUTHOR' | 'REVIEWER'; recovery?: { sessionId?: string } }) => {
+      if (role === 'AUTHOR') {
+        expect(recovery).toMatchObject({ sessionId: 'author-session' });
+        return authorState;
+      }
+      expect(recovery).toMatchObject({ sessionId: 'reviewer-session' });
+      return reviewerState;
+    });
+    const cfg = config(3);
+    cfg.reviewerSettings.prompt = ({ round, feedback, authorReply }: { round: number; feedback: string; authorReply: string }) =>
+      `reviewer ${round}\nfeedback=${feedback || '<none>'}\nauthor=${authorReply}`;
+
+    mocks.runTurn.mockImplementation(async ({ role, round, prompt }: { role: 'AUTHOR' | 'REVIEWER'; round: number; prompt: string }) => {
+      if (role === 'AUTHOR') return 'unexpected author rerun';
+      expect(round).toBe(2);
+      expect(prompt).toContain('Implemented persistence and targeted restart tests.');
+      return 'APPROVED\nRestart recovery verified after resume.';
+    });
+
+    const result = await createLoopEngine({ config: { ...cfg, runRecovery: { store } } }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 2, maxRounds: 3 });
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(0);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(1);
+    expect(store.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the Spar session lifecycle separately from run recovery', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session', sessionId: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session', sessionId: 'reviewer-session' } };
+    const sparSessionStore = {
+      start: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+    };
+    const runRecoveryStore = {
+      load: vi.fn().mockReturnValue(null),
+      write: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? 'implemented' : 'APPROVED\nLooks good.',
+    );
+
+    const result = await createLoopEngine({
+      config: {
+        ...config(1),
+        sparSession: { store: sparSessionStore },
+        runRecovery: { store: runRecoveryStore },
+      },
+    }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(sparSessionStore.start).toHaveBeenCalledTimes(1);
+    expect(sparSessionStore.complete).toHaveBeenCalledWith(expect.objectContaining({ approved: true, rounds: 1 }));
+    expect(sparSessionStore.fail).not.toHaveBeenCalled();
+    expect(runRecoveryStore.write).toHaveBeenCalled();
+    expect(runRecoveryStore.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes from a saved approval decision without rerunning agent turns', async () => {
+    const authorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-session', sessionId: 'author-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 2 },
+    };
+    const reviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session', sessionId: 'reviewer-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 2 },
+    };
+    const onApproved = vi.fn().mockResolvedValue({ continue: false });
+    const store = {
+      load: vi.fn().mockReturnValue({
+        version: 1,
+        identity: {},
+        identityHash: 'x',
+        updatedAt: 1,
+        loop: {
+          roundLimit: 2,
+          approvalContinuations: 0,
+          feedback: 'APPROVED',
+          pending: {
+            type: 'approval-decision',
+            round: 2,
+            started: true,
+            result: {
+              approved: true,
+              feedback: 'APPROVED\nReady for handoff.',
+              maxRounds: 2,
+              rounds: 2,
+              cwd: process.cwd(),
+              continuationLimitReached: false,
+            },
+          },
+        },
+        roles: {
+          AUTHOR: { sessionId: 'author-session', turnsOnActiveSession: 2 },
+          REVIEWER: { sessionId: 'reviewer-session', turnsOnActiveSession: 2 },
+        },
+      }),
+      write: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+
+    const result = await createLoopEngine({ config: { ...config(2), onApproved, runRecovery: { store } } }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 2, feedback: 'APPROVED\nReady for handoff.' });
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(onApproved).toHaveBeenCalledWith(expect.objectContaining({ approved: true, rounds: 2 }));
+    expect(store.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to fresh sessions when saved session ids are stale or unavailable', async () => {
+    const authorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-fresh', sessionId: 'author-fresh' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    const reviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-fresh', sessionId: 'reviewer-fresh' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    const store = {
+      load: vi.fn().mockReturnValue({
+        version: 1,
+        identity: {},
+        identityHash: 'x',
+        updatedAt: 1,
+        loop: {
+          roundLimit: 2,
+          approvalContinuations: 0,
+          feedback: '',
+          pending: { type: 'author-turn', round: 1, started: false },
+        },
+        roles: {
+          AUTHOR: { sessionId: 'author-stale', turnsOnActiveSession: 4 },
+          REVIEWER: { sessionId: 'reviewer-stale', turnsOnActiveSession: 3 },
+        },
+      }),
+      write: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    mocks.openRole.mockImplementation(async ({ role, recovery }: { role: 'AUTHOR' | 'REVIEWER'; recovery?: { sessionId?: string } }) => {
+      expect(recovery?.sessionId).toMatch(/-stale$/);
+      return role === 'AUTHOR' ? authorState : reviewerState;
+    });
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? (round === 2 ? 'APPROVED' : '1. Keep going') : 'implemented fix',
+    );
+
+    const result = await createLoopEngine({ config: { ...config(2), runRecovery: { store } } }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(mocks.runTurn).toHaveBeenCalledTimes(4);
+  });
+
+  it('roundtrips engine-written recovery through the real store after interruption and resumes reviewer verification', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spar-engine-recovery-'));
+    const cfg = config(3);
+    cfg.reviewerSettings.prompt = ({ round, feedback, authorReply }: { round: number; feedback: string; authorReply: string }) =>
+      `reviewer ${round}\nfeedback=${feedback || '<none>'}\nauthor=${authorReply}`;
+    const store = createRunRecoveryStore({ enabled: true, home, config: cfg });
+    const authorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-session', sessionId: 'author-session' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    const reviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session', sessionId: 'reviewer-session' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+
+    mocks.openRole.mockImplementation(async ({ role, recovery }: { role: 'AUTHOR' | 'REVIEWER'; recovery?: { sessionId?: string } }) => {
+      if (role === 'AUTHOR') {
+        expect(recovery?.sessionId).toBeUndefined();
+        return authorState;
+      }
+      expect(recovery?.sessionId).toBeUndefined();
+      return reviewerState;
+    });
+
+    const interruption = new Error('simulated interruption after recovery checkpoint');
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') return 'Implemented run recovery and replay-based split-word fix.';
+      throw interruption;
+    });
+
+    await expect(createLoopEngine({ config: { ...cfg, runRecovery: { enabled: true, home, store } } }).run())
+      .rejects.toThrow('simulated interruption after recovery checkpoint');
+
+    const writtenRecovery = store.load();
+    expect(writtenRecovery).toMatchObject({
+      loop: {
+        feedback: '',
+        pending: {
+          type: 'reviewer-turn',
+          round: 1,
+          started: true,
+          authorReply: 'Implemented run recovery and replay-based split-word fix.',
+        },
+      },
+      roles: {
+        AUTHOR: { sessionId: 'author-session', turnsOnActiveSession: 1 },
+        REVIEWER: { sessionId: 'reviewer-session', turnsOnActiveSession: 1 },
+      },
+    });
+
+    mocks.openRole.mockReset();
+    mocks.runTurn.mockReset();
+    mocks.closeRole.mockReset();
+
+    const resumedAuthorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-session', sessionId: 'author-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 1 },
+    };
+    const resumedReviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session', sessionId: 'reviewer-session' },
+      recovery: { resumed: true, turnsOnActiveSession: 1 },
+    };
+    mocks.openRole.mockImplementation(async ({ role, recovery }: { role: 'AUTHOR' | 'REVIEWER'; recovery?: { sessionId?: string } }) => {
+      if (role === 'AUTHOR') {
+        expect(recovery).toMatchObject({ sessionId: 'author-session', turnsOnActiveSession: 1 });
+        return resumedAuthorState;
+      }
+      expect(recovery).toMatchObject({ sessionId: 'reviewer-session', turnsOnActiveSession: 1 });
+      return resumedReviewerState;
+    });
+    mocks.runTurn.mockImplementation(async ({ role, round, prompt }: { role: 'AUTHOR' | 'REVIEWER'; round: number; prompt: string }) => {
+      if (role === 'AUTHOR') return 'author should not rerun';
+      expect(round).toBe(1);
+      expect(prompt).toContain('Implemented run recovery and replay-based split-word fix.');
+      return 'APPROVED\nReviewer resume verified through the persisted recovery store.';
+    });
+
+    const resumed = await createLoopEngine({ config: { ...cfg, runRecovery: { enabled: true, home, store } } }).run();
+
+    expect(resumed).toMatchObject({ approved: true, rounds: 1 });
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(0);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(1);
+    expect(store.load()).toBeNull();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
 });

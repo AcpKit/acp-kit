@@ -8,7 +8,7 @@ import { createLocalFileSystemHost, createLocalTerminalHost, nodeChildProcessTra
 import { formatEnvAssignment } from '../config/shell.mjs';
 import { createStartupProfiler, roleStatusMessageForPhase } from './startup-profile.mjs';
 
-export async function openRole({ role, settings, cwd, trace, captureTrace, renderer }) {
+export async function openRole({ role, settings, cwd, trace, captureTrace, renderer, recovery }) {
   let lastRoleStatusMessage = null;
   const emitRoleStatus = (message) => {
     if (!message || message === lastRoleStatusMessage) return;
@@ -59,8 +59,11 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
   let session;
   let unsubscribeUsage = () => {};
   let unsubscribePlan = () => {};
+  let resumed = false;
   try {
-    session = await runtime.newSession({ cwd: resolve(cwd) });
+    const opened = await openRuntimeSession({ runtime, cwd, recovery, emitRoleStatus });
+    session = opened.session;
+    resumed = opened.resumed;
     if (renderer.onUsageUpdate) {
       unsubscribeUsage = session.on('session.usage.updated', (event) => {
         if (process.env.ACP_REVIEW_DEBUG_USAGE) {
@@ -91,6 +94,11 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       role,
       inspector,
       session,
+      recovery: {
+        resumed,
+        requestedSessionId: recovery?.sessionId ?? null,
+        turnsOnActiveSession: resumed ? Math.max(0, Number(recovery?.turnsOnActiveSession) || 0) : 0,
+      },
       startupProfile,
       close: async () => {
         unsubscribeUsage();
@@ -123,6 +131,31 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       );
     }
     throw error;
+  }
+}
+
+async function openRuntimeSession({ runtime, cwd, recovery, emitRoleStatus }) {
+  const resolvedCwd = resolve(cwd);
+  const sessionId = typeof recovery?.sessionId === 'string' ? recovery.sessionId.trim() : '';
+  if (!sessionId) {
+    return {
+      session: await runtime.newSession({ cwd: resolvedCwd }),
+      resumed: false,
+    };
+  }
+
+  emitRoleStatus(`resuming saved session ${sessionId}...`);
+  try {
+    return {
+      session: await runtime.loadSession({ sessionId, cwd: resolvedCwd }),
+      resumed: true,
+    };
+  } catch {
+    emitRoleStatus('saved session unavailable, starting fresh...');
+    return {
+      session: await runtime.newSession({ cwd: resolvedCwd }),
+      resumed: false,
+    };
   }
 }
 
