@@ -250,13 +250,14 @@ function looksLikeSplitWord(previous, next) {
   const nextHead = next.match(/^([A-Za-z]+)/)?.[1] ?? '';
   if (!previousTail || !nextHead) return false;
   const previousTailLower = previousTail.toLowerCase();
-  if (previousTail.length <= 3) return true;
-  if (nextHead.length <= 3) return true;
-  if (previousTail.length <= 4 && nextHead.length <= 4) return true;
+  const joinedLower = `${previousTail}${nextHead}`.toLowerCase();
+  if (/^(?:world|complete|websocket|websockets|webhook|webhooks|webview|webviews|webpack|website|websites|localhost|middleware|typescript|javascript|stylesheet|database|databases|filesystem|hostname|username|pathname|metadata|workspace|workspaces|endpoint|endpoints|callback|callbacks|backend|frontend|runtime|subprocess|codebase|codebases|tokens?|tooling)$/.test(joinedLower)) {
+    return true;
+  }
   if (/^(?:un|re|dis|pre|sub|mis|de|over|under|out|co|non|semi|bi|tri|anti|auto|counter|hyper|infra|inter|macro|micro|multi|pseudo|super|tele|thermo|trans|ultra)$/i.test(previousTailLower)) {
     return true;
   }
-  return /^(?:tion|sion|ation|ition|ption|ction|ctions|tions|sions|mation|cation|fication|gation|lation|ration|mentation|umentation|ment|ments|ness|less|able|ible|ally|fully|ously|ingly|edly|ities|ality|istic|ology|graphy|scope|ware|ship|hood|ward|wards|ized|ising|izing|ed|er|ers|est|ly|al|ial|ual|ive|ives|ize|ise|ous|ant|ent)$/i.test(nextHead);
+  return /^(?:socket|sockets|hook|hooks|view|views|pack|site|sites|host|name|path|point|points|base|bases|time|ware|script|style|sheet|system|space|spaces|tion|sion|ation|ition|ption|ction|ctions|tions|sions|mation|cation|fication|gation|lation|ration|mentation|umentation|ment|ments|ness|less|able|ible|ally|fully|ously|ingly|edly|ities|ality|istic|ology|graphy|scope|ship|hood|ward|wards|ized|ising|izing|ed|er|ers|est|ly|al|ial|ual|ive|ives|ize|ise|ous|ant|ent)$/i.test(nextHead);
 }
 function suffixPrefixOverlap(left, right) {
   const max = Math.min(left.length, right.length);

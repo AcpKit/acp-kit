@@ -97,6 +97,30 @@ describe('session cancellation', () => {
 
     await runtime.shutdown();
   });
+
+  it('does not treat ordinary cancellation-looking error text as a user cancel', async () => {
+    const { factory } = createBasicConnectionFactory({
+      prompt: vi.fn().mockRejectedValue(new Error('cleanup cancelled because disk is full')),
+    });
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test', command: 'test', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory: factory,
+    });
+
+    const session = await runtime.newSession();
+    const events: string[] = [];
+    session.on('event', (e) => events.push(e.type));
+
+    await expect(session.prompt('hello')).rejects.toThrow('cleanup cancelled because disk is full');
+    expect(events).toContain('turn.failed');
+    expect(events).not.toContain('turn.cancelled');
+
+    await runtime.shutdown();
+  });
 });
 
 describe('session dispose/close edge cases', () => {

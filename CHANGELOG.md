@@ -8,6 +8,14 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-05-02
+
+### Fixed
+
+- `@acp-kit/core` now classifies turn cancellation only when the client requested cancellation or the ACP adapter returns the JSON-RPC cancellation code, avoiding false `turn.cancelled` events from unrelated error text.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` now closes ACP sessions gracefully before force-killing leftover terminal processes, reducing spurious tool-call interruption reports.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` fixes TUI/plain renderer regressions around split streaming words, wrapped long lines showing truncation dots, and tool-call summaries missing output line counts.
+
 ## [0.6.15] - 2026-04-30
 
 ### Changed

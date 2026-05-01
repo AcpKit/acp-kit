@@ -19,6 +19,10 @@ import { onRuntimeEvent, type RuntimeEventHandlers } from './runtime-event.js';
 import type { RuntimeHost } from './host.js';
 import type { AgentProfile } from './agents.js';
 
+function hasAcpCancellationCode(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === -32800);
+}
+
 function newId(): string {
   // Web Crypto is available in Node >=19 and every modern browser/Webview.
   const c: { randomUUID?: () => string } | undefined = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -258,7 +262,7 @@ export class RuntimeSession {
     } catch (error) {
       this.flushPendingStreams();
       const message = error instanceof Error ? error.message : String(error);
-      const cancelled = this.cancelling || /cancel/i.test(message);
+      const cancelled = this.cancelling || hasAcpCancellationCode(error);
       if (cancelled) {
         this.emitEvent({
           type: 'turn.cancelled',

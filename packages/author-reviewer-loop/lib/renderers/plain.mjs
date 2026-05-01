@@ -121,6 +121,20 @@ export function createPlainRenderer() {
     return truncateText(stringifyValue(value), max);
   };
 
+  const lineCount = (value) => {
+    if (value == null) return 0;
+    const text = typeof value === 'string' ? value : stringifyValue(value);
+    if (!text) return 0;
+    return text.split('\n').length;
+  };
+
+  const formatToolSize = ({ lines = 0, chars = 0 } = {}) => {
+    const parts = [];
+    if (Number.isFinite(lines) && lines > 0) parts.push(`${lines} ${lines === 1 ? 'line' : 'lines'}`);
+    if (Number.isFinite(chars) && chars > 0) parts.push(`${chars} chars`);
+    return parts.join(' · ');
+  };
+
   const summarizeTool = (event, { includeOutput = false } = {}) => {
     const parts = [`  [tool ${event.tag} ${toolStatusLabel(event.status || 'running')}]`];
     if (event.title) parts.push(event.title);
@@ -129,7 +143,8 @@ export function createPlainRenderer() {
     if (includeOutput) {
       const output = summarizeValue(event.output, 70);
       if (output) parts.push(`out: ${output}`);
-      if (event.chars) parts.push(`${event.chars} chars`);
+      const size = formatToolSize({ lines: lineCount(event.output), chars: event.chars });
+      if (size) parts.push(size);
     }
     return parts.join(' ');
   };

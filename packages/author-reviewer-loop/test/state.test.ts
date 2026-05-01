@@ -216,6 +216,20 @@ describe('author-reviewer-loop state reducer', () => {
     ]);
   });
 
+  it('does not inject spaces into common technical words split across chunks', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'webs' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'ocket server' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'middle' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'ware stack' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'websocket server' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'middleware stack' },
+    ]);
+  });
+
   it('keeps separate whole-word stream chunks spaced apart', () => {
     let state = initialState();
     state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'patch' });
@@ -232,6 +246,20 @@ describe('author-reviewer-loop state reducer', () => {
       content: 'latest tool',
       charCount: 'latest tool'.length,
     });
+  });
+
+  it('keeps short adjacent word chunks spaced apart', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'run' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'tests' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'fix' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'api' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'run tests' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'fix api' },
+    ]);
   });
 
   it('deduplicates overlapping reasoning chunks', () => {

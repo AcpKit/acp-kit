@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   },
   session: {
     setModel: vi.fn(),
+    close: vi.fn(),
     dispose: vi.fn(),
     transcript: { session: { models: { availableModels: [{ id: 'good-model' }] } } },
     on: vi.fn(),
@@ -66,6 +67,7 @@ describe('runtime role adapter', () => {
     mocks.runtime.newSession.mockReset();
     mocks.runtime.shutdown.mockReset();
     mocks.session.setModel.mockReset();
+    mocks.session.close.mockReset();
     mocks.session.dispose.mockReset();
     mocks.terminalHost.terminals = new Map();
     mocks.terminalResolveCwd = undefined;
@@ -85,6 +87,7 @@ describe('runtime role adapter', () => {
     mocks.createAcpRuntime.mockReturnValue(mocks.runtime);
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
+    mocks.session.close.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
   });
 
@@ -162,7 +165,7 @@ describe('runtime role adapter', () => {
     await state.close();
   });
 
-  it('disposes a created session when model setup fails', async () => {
+  it('closes a created session before force-killing remaining terminals when model setup fails', async () => {
     const child = { killed: false, kill: vi.fn() };
     mocks.terminalHost.terminals.set('child', child);
 
@@ -179,13 +182,15 @@ describe('runtime role adapter', () => {
       },
     })).rejects.toThrow('bad-model');
 
-    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
-    expect(mocks.session.dispose).toHaveBeenCalledTimes(1);
+    expect(mocks.session.close).toHaveBeenCalledTimes(1);
     expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(child.kill.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.runtime.shutdown.mock.invocationCallOrder[0]);
+    expect(mocks.session.dispose).not.toHaveBeenCalled();
   });
 
   it('surfaces cleanup failure alongside the original startup failure', async () => {
-    mocks.session.dispose.mockRejectedValueOnce(new Error('cleanup failed while disposing session'));
+    mocks.session.close.mockRejectedValueOnce(new Error('cleanup failed while closing session'));
 
     const thrown = await openRole({
       role: 'AUTHOR',
@@ -204,7 +209,7 @@ describe('runtime role adapter', () => {
     expect(thrown.message).toBe('Role startup failed and cleanup also failed.');
     expect(thrown.errors.map((error: Error) => error.message)).toEqual(expect.arrayContaining([
       expect.stringContaining('bad-model'),
-      'cleanup failed while disposing session',
+      'cleanup failed while closing session',
     ]));
   });
 
@@ -399,7 +404,7 @@ describe('runtime role adapter', () => {
         modelEnvName: 'AUTHOR_MODEL',
       },
     });
-    mocks.session.dispose.mockRejectedValueOnce(new Error('disk full while persisting transcript'));
+    mocks.session.close.mockRejectedValueOnce(new Error('disk full while persisting transcript'));
 
     const thrown = await closeRole(state).catch((error) => error);
 

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-05-02
+
+### Fixed
+
+- Spar now closes ACP sessions gracefully before force-killing leftover terminal processes, reducing spurious tool-call interruption reports.
+- Fixed TUI/plain renderer regressions around split streaming words, wrapped long lines showing truncation dots, and tool-call summaries missing output line counts.
+
 ## [0.6.15] - 2026-04-30
 
 ### Changed

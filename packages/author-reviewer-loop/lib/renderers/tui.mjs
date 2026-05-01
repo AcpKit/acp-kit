@@ -198,6 +198,25 @@ function closeDanglingParen(text, maxWidth) {
 export function fitTuiDisplayText(text, width, options = {}) {
   return fitText(text, width, options).text;
 }
+
+function lineCount(value) {
+  if (value == null) return 0;
+  if (typeof value === 'string') return value ? value.split('\n').length : 0;
+  try {
+    return JSON.stringify(value, null, 2).split('\n').length;
+  } catch {
+    const text = String(value);
+    return text ? text.split('\n').length : 0;
+  }
+}
+
+export function formatTuiToolSize({ lines = 0, chars = 0 } = {}) {
+  const parts = [];
+  if (Number.isFinite(lines) && lines > 0) parts.push(pluralize(lines, 'line'));
+  if (Number.isFinite(chars) && chars > 0) parts.push(`${chars} chars`);
+  return parts.join(' · ');
+}
+
 function wrapDisplayLine(line, cols) {
   line = sanitizeDisplayText(line);
   if (cols <= 0) return [''];
@@ -784,8 +803,8 @@ export async function runTui({ config }) {
     return h(Box, { key, height: 1, overflow: 'hidden' }, child);
   }
 
-  function rowText(text, key) {
-    return line(h(Text, { wrap: 'truncate-end' }, text), key);
+  function rowText(text, key, { clipped = view.wrap } = {}) {
+    return line(h(Text, { wrap: clipped ? 'truncate-clip' : 'truncate-end' }, text), key);
   }
 
   function muted(text) {
@@ -924,7 +943,8 @@ export async function runTui({ config }) {
     const parts = [`${item.tag || '#?'} ${status}`, title];
     if (input) parts.push(`cmd: ${input}`);
     if (output) parts.push(`out: ${output}`);
-    if (item.chars) parts.push(`${item.chars} chars`);
+    const size = formatTuiToolSize({ lines: lineCount(item.output), chars: item.chars });
+    if (size) parts.push(size);
     return parts.join(' - ');
   }
 
@@ -1348,6 +1368,11 @@ export async function runTui({ config }) {
 
   function padCell(value, width) {
     const fitted = fitText(sanitizeDisplayText(value), width, { ellipsis: true });
+    return fitted.text + ' '.repeat(Math.max(0, width - fitted.width));
+  }
+
+  function padWrappedCell(value, width) {
+    const fitted = fitText(sanitizeDisplayText(value), width, { ellipsis: false });
     return fitted.text + ' '.repeat(Math.max(0, width - fitted.width));
   }
 
@@ -2332,11 +2357,11 @@ export async function runTui({ config }) {
             // the line plus a bold, brighter row. This is far more
             // visible than `inverse:` over a single tool summary line.
             const marker = selected ? '\u25b6 ' : '  ';
-            const cell = padCell(`${marker}${text}`, innerWidth);
+            const cell = view.wrap ? padWrappedCell(`${marker}${text}`, innerWidth) : padCell(`${marker}${text}`, innerWidth);
             return line(
               h(
                 Text,
-                { wrap: 'truncate-end' },
+                { wrap: view.wrap ? 'truncate-clip' : 'truncate-end' },
                 h(Text, { color: borderColor, bold: focused }, sideL),
                 h(
                   Text,
@@ -2351,11 +2376,11 @@ export async function runTui({ config }) {
               row.key ?? `l-${role}-${selectedRound ?? 'none'}-${visibleStart + i}`,
             );
           }
-          const cell = padCell(text, innerWidth);
+          const cell = view.wrap ? padWrappedCell(text, innerWidth) : padCell(text, innerWidth);
           return line(
             h(
               Text,
-              { wrap: 'truncate-end' },
+              { wrap: view.wrap ? 'truncate-clip' : 'truncate-end' },
               h(Text, { color: borderColor, bold: focused }, sideL),
               h(
                 Text,
@@ -2502,7 +2527,7 @@ export async function runTui({ config }) {
         `name: ${tool.name || '(unknown)'}`,
         `title: ${tool.title || '(untitled)'}`,
         `status: ${tool.status || 'running'}`,
-        `chars: ${tool.chars ?? 0}`,
+        `size: ${formatTuiToolSize({ lines: lineCount(tool.output), chars: tool.chars ?? 0 }) || '0 chars'}`,
         '',
         'input:',
         ...prettyValue(tool.input).map((line) => `  ${line}`),

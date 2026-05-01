@@ -264,16 +264,11 @@ function formatModelList(models) {
 async function cleanupRoleResources({ session, runtime, terminalHost }) {
   const errors = [];
 
-  try {
-    for (const child of terminalHost.terminals?.values?.() ?? []) {
-      if (!child.killed && typeof child.kill === 'function') child.kill('SIGKILL');
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-
   if (session) {
-    await session.dispose().catch((error) => {
+    const closeSession = typeof session.close === 'function'
+      ? session.close.bind(session)
+      : session.dispose?.bind(session);
+    await closeSession?.().catch((error) => {
       errors.push(error);
     });
   }
@@ -282,8 +277,20 @@ async function cleanupRoleResources({ session, runtime, terminalHost }) {
     errors.push(error);
   });
 
+  try {
+    killRemainingTerminals(terminalHost);
+  } catch (error) {
+    errors.push(error);
+  }
+
   if (errors.length > 0) {
     throw new AggregateError(errors, 'Failed to clean up ACP role resources.');
+  }
+}
+
+function killRemainingTerminals(terminalHost) {
+  for (const child of terminalHost.terminals?.values?.() ?? []) {
+    if (!child.killed && typeof child.kill === 'function') child.kill('SIGKILL');
   }
 }
 

@@ -13,6 +13,7 @@ import {
   formatTuiPlanSummary,
   formatTuiReasoningLabel,
   formatTuiTerminalTitle,
+  formatTuiToolSize,
   formatTuiTaskEditorWaitingTitle,
   formatTuiUsageLabel,
   formatTuiForceContinueDecision,
@@ -155,6 +156,20 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
   it('keeps wrapped display rows bounded even when the pane width collapses to zero', () => {
     expect(wrapTuiDisplayRows('Huge recovery transcript that should never leak past zero-width panes', 0)).toEqual(['']);
     expect(wrapTuiDisplayRows('abc def ghi', 4)).toEqual(['abc', 'def', 'ghi']);
+    const longTokenRows = wrapTuiDisplayRows('websocket-output-without-spaces', 9);
+    expect(longTokenRows.every((row) => row.length <= 9)).toBe(true);
+    expect(longTokenRows.join('')).not.toContain('...');
+  });
+
+  it('formats tool output size as lines before characters', () => {
+    expect(formatTuiToolSize({ lines: 3, chars: 120 })).toBe('3 lines · 120 chars');
+    expect(formatTuiToolSize({ lines: 1, chars: 8 })).toBe('1 line · 8 chars');
+    expect(formatTuiToolSize({ lines: 0, chars: 8 })).toBe('8 chars');
+  });
+
+  it('formats structured tool output size using pretty JSON rows', () => {
+    const prettyRows = JSON.stringify({ content: ['alpha', 'beta'] }, null, 2).split('\n').length;
+    expect(formatTuiToolSize({ lines: prettyRows, chars: 34 })).toBe(`${prettyRows} lines · 34 chars`);
   });
 
   it('renders compact pane headlines without noisy counts', () => {
