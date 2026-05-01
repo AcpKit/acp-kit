@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-05-02
+
+### Fixed
+
+- Fixed a TUI crash when opening trace, tool-call, task, or error detail screens with wrapping enabled. Detail row rendering no longer references React view state from an outer helper default parameter, and regression tests now cover the helper boundary, long-token wrapping, and tool-output size summaries.
+
 ## [0.6.16] - 2026-05-02
 
 ### Fixed

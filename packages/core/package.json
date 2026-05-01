@@ -1,6 +1,6 @@
 {
   "name": "@acp-kit/core",
-  "version": "0.6.16",
+  "version": "0.6.17",
   "description": "Agent Client Protocol framework and runtime for launching ACP agents, managing auth and permissions, normalizing session events, and building agent clients on top of @agentclientprotocol/sdk.",
   "type": "module",
   "main": "./dist/index.js",

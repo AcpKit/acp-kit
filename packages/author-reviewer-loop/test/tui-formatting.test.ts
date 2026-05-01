@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PaneStatus, Phase } from '../lib/engine.mjs';
 import {
   formatTuiAvailabilityLabel,
   formatTuiDashboardTitle,
+  formatTuiDetailRowWrapMode,
   formatTuiEmptyState,
   formatTuiFinishSummary,
   formatTuiPaneHeadlineFitted,
@@ -161,10 +163,27 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     expect(longTokenRows.join('')).not.toContain('...');
   });
 
+  it('keeps long unbroken wrapped display rows intact and bounded', () => {
+    const rows = wrapTuiDisplayRows('websocket', 2);
+
+    expect(rows).toEqual(['we', 'bs', 'oc', 'ke', 't']);
+    expect(rows.join('')).toBe('websocket');
+    expect(rows.join(' ')).not.toContain('we bcosket');
+    expect(rows.every((row) => row.length <= 2)).toBe(true);
+  });
+
+  it('uses safe detail row wrap defaults outside React view scope', () => {
+    expect(formatTuiDetailRowWrapMode()).toBe('truncate-end');
+    expect(formatTuiDetailRowWrapMode({ wrapped: false })).toBe('truncate-end');
+    expect(formatTuiDetailRowWrapMode({ wrapped: true })).toBe('truncate-clip');
+  });
+
   it('formats tool output size as lines before characters', () => {
     expect(formatTuiToolSize({ lines: 3, chars: 120 })).toBe('3 lines · 120 chars');
     expect(formatTuiToolSize({ lines: 1, chars: 8 })).toBe('1 line · 8 chars');
     expect(formatTuiToolSize({ lines: 0, chars: 8 })).toBe('8 chars');
+    expect(formatTuiToolSize({ lines: 3, chars: 0 })).toBe('3 lines');
+    expect(formatTuiToolSize({ lines: 0, chars: 0 })).toBe('');
   });
 
   it('formats structured tool output size using pretty JSON rows', () => {
@@ -588,5 +607,16 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     });
     expect(fitted).not.toMatch(/\([^)]*$/);
     expect(fitted).toContain(')');
+  });
+
+  it('keeps TUI detail row helper independent from React view state', () => {
+    const source = readFileSync(new URL('../lib/renderers/tui.mjs', import.meta.url), 'utf8');
+    const rowTextMatch = source.match(/function rowText\([^]*?\n  \}/);
+    const detailCalls = [...source.matchAll(/rowText\(row === '' \? ' ' : row, [^\n]+, \{ clipped: view\.wrap \}\)/g)];
+
+    expect(rowTextMatch?.[0]).toBeTruthy();
+    expect(rowTextMatch?.[0]).not.toContain('view.');
+    expect(rowTextMatch?.[0]).toContain('formatTuiDetailRowWrapMode');
+    expect(detailCalls).toHaveLength(4);
   });
 });

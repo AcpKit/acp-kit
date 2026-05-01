@@ -213,8 +213,12 @@ function lineCount(value) {
 export function formatTuiToolSize({ lines = 0, chars = 0 } = {}) {
   const parts = [];
   if (Number.isFinite(lines) && lines > 0) parts.push(pluralize(lines, 'line'));
-  if (Number.isFinite(chars) && chars > 0) parts.push(`${chars} chars`);
+  if (Number.isFinite(chars) && chars > 0) parts.push(String(chars) + ' chars');
   return parts.join(' · ');
+}
+
+export function formatTuiDetailRowWrapMode({ wrapped = false } = {}) {
+  return wrapped ? 'truncate-clip' : 'truncate-end';
 }
 
 function wrapDisplayLine(line, cols) {
@@ -803,8 +807,8 @@ export async function runTui({ config }) {
     return h(Box, { key, height: 1, overflow: 'hidden' }, child);
   }
 
-  function rowText(text, key, { clipped = view.wrap } = {}) {
-    return line(h(Text, { wrap: clipped ? 'truncate-clip' : 'truncate-end' }, text), key);
+  function rowText(text, key, { clipped = false } = {}) {
+    return line(h(Text, { wrap: formatTuiDetailRowWrapMode({ wrapped: clipped }) }, text), key);
   }
 
   function muted(text) {
@@ -2503,7 +2507,7 @@ export async function runTui({ config }) {
           overflow: 'hidden',
         },
         line(h(Text, { bold: true, color: 'yellow' }, 'ACP Trace · redacted wire messages'), 'trace-header'),
-        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `trace-${i}`)),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `trace-${i}`, { clipped: view.wrap })),
       );
     }
 
@@ -2577,7 +2581,7 @@ export async function runTui({ config }) {
           ),
           'tool-header',
         ),
-        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `tool-${i}`)),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `tool-${i}`, { clipped: view.wrap })),
       );
     }
 
@@ -2614,7 +2618,7 @@ export async function runTui({ config }) {
           'task-header',
         ),
         line(shortcutLine(muted('Tip: press '), shortcutLabel('e'), muted(' here to edit the task.')), 'task-edit-tip'),
-        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `task-full-${i}`)),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `task-full-${i}`, { clipped: view.wrap })),
       );
     }
 
@@ -2648,7 +2652,7 @@ export async function runTui({ config }) {
           ),
           'error-header',
         ),
-        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `error-${i}`)),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `error-${i}`, { clipped: view.wrap })),
       );
     }
 

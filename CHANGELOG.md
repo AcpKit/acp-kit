@@ -8,6 +8,12 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-05-02
+
+### Fixed
+
+- Spar fixes a TUI crash when opening trace, tool-call, task, or error detail screens with wrapping enabled. Detail row rendering no longer references React view state from an outer helper default parameter, and regression tests now cover the helper boundary, long-token wrapping, and tool-output size summaries.
+
 ## [0.6.16] - 2026-05-02
 
 ### Fixed
