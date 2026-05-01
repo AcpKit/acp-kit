@@ -7,9 +7,27 @@ import {
   QwenCode,
 } from '@acp-kit/core';
 
+const codexRealWorkspaceArgs = Object.freeze([
+  '-c', 'sandbox_mode="danger-full-access"',
+  '-c', 'approval_policy="never"',
+]);
+
+function withCodexRealWorkspaceDefaults(agent) {
+  return {
+    ...agent,
+    args: [...agent.args, ...codexRealWorkspaceArgs],
+    fallbackCommands: (agent.fallbackCommands ?? []).map((fallback) => ({
+      ...fallback,
+      args: [...fallback.args, ...codexRealWorkspaceArgs],
+    })),
+  };
+}
+
+export const SparCodexCli = withCodexRealWorkspaceDefaults(CodexCli);
+
 export const agents = {
   claude: ClaudeCode,
-  codex: CodexCli,
+  codex: SparCodexCli,
   copilot: GitHubCopilot,
   gemini: GeminiCli,
   opencode: OpenCode,

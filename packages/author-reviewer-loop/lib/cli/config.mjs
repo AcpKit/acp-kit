@@ -11,18 +11,20 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
   const program = new Command()
     .name('author-reviewer-loop')
     .description('Run split-context AUTHOR and REVIEWER ACP agents over one workspace.')
-    .usage('<cwd> <task-or-task-file...> [--yes] [--cli]')
+    .usage('<cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]')
     .argument('<cwd>', 'workspace directory')
     .argument('<task...>', 'task text, or a relative/absolute path to a UTF-8 task file')
     .option('-y, --yes', 'skip confirmation prompt')
     .option('--cli', 'use the plain line-based renderer instead of the default TUI')
     .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
+    .option('--quality <quality>', 'quality level: prod|dev')
     .addHelpText('after', `
 Environment:
   AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   TUI: no built-in default; CLI default: ${defaults.authorAgent}
   AUTHOR_MODEL=<model-id>                                  TUI: chosen per agent; CLI default: ${defaults.authorModel}
   REVIEWER_AGENT=copilot|claude|codex|gemini|qwen|opencode TUI: no built-in default; CLI default: ${defaults.reviewerAgent}
   REVIEWER_MODEL=<model-id>                                TUI: chosen per agent; CLI default: ${defaults.reviewerModel}
+  SPAR_QUALITY=prod|dev                                     default: prod
   MAX_ROUNDS=<n>                                            default: ${defaults.maxRounds}
   AUTHOR_SESSION_TURNS=<n>                                  default: ${defaults.sessionTurns}
   REVIEWER_SESSION_TURNS=<n>                                default: ${defaults.sessionTurns}
@@ -44,6 +46,7 @@ Environment:
   const { task, taskSource } = resolveTask(parsedArgs.taskParts, cwd);
   const opts = program.opts();
   const tui = resolveRendererMode(opts);
+  const quality = resolveQuality(opts);
   const resolvedPreferencesPath = preferencesPath ?? defaultPreferencesFilePath();
   const saved = normalizePreferences(preferences ?? readPreferences({ filePath: resolvedPreferencesPath }));
   const authorResolved = resolveRoleConfig({
@@ -72,6 +75,7 @@ Environment:
     task,
     taskSource,
     maxRounds: envPositiveInt('MAX_ROUNDS', defaults.maxRounds),
+    quality,
     trace: envFlag('ACP_REVIEW_TRACE'),
     skipConfirm: Boolean(opts.yes) || envFlag('ACP_REVIEW_YES'),
     tui,
@@ -89,6 +93,7 @@ Environment:
         task: config.task,
         round,
         feedback,
+        quality: config.quality,
       }),
     },
     reviewerSettings: {
@@ -105,6 +110,7 @@ Environment:
         round,
         feedback,
         authorReply,
+        quality: config.quality,
       }),
     },
   };
@@ -193,11 +199,40 @@ function authorReplySection(authorReply) {
   return `AUTHOR's reply for this round (their summary of what they changed):\n${text}\n\n`;
 }
 
-function createAuthorPrompt({ cwd, task, round, feedback }) {
+function createAuthorPrompt({ cwd, task, round, feedback, quality }) {
   const taskLabel = round === 1 ? 'Task' : 'Current task';
+  const feedbackText = String(feedback || '').trim() || '<none>';
+  if (quality === 'dev') {
+    const roundSpecificSection = round === 1
+      ? ''
+      : `REVIEWER feedback:\n${feedbackText}\n\n`;
+
+    return [
+      `You are the AUTHOR. Working dir: ${cwd}`,
+      '',
+      `${taskLabel}: ${task}`,
+      '',
+      roundSpecificSection ? roundSpecificSection.trimEnd() : null,
+      round === 1
+        ? 'Work on the task using your code agent tools.'
+        : 'Continue the task using your code agent tools.',
+      '',
+      'Steps:',
+      round === 1
+        ? '1. Inspect the relevant project files and existing patterns.'
+        : '1. Inspect the relevant files and reviewer feedback.',
+      round === 1
+        ? '2. Implement the changes needed to complete the task.'
+        : '2. Apply the changes needed to address the feedback.',
+      '3. Update tests or docs when they are part of the task or useful for validating the change.',
+      '4. Run relevant validation when practical.',
+      '5. Reply with a concise summary of what changed and what validation was run.',
+    ].filter(Boolean).join('\n');
+  }
+
   const roundSpecificSection = round === 1
     ? ''
-    : `REVIEWER feedback:\n${String(feedback || '').trim() || '<none>'}\n\n`
+    : `REVIEWER feedback:\n${feedbackText}\n\n`
       + 'Address every reviewer point in code, tests, docs, or behavior as needed. '
       + 'Keep the same production-grade bar from the first round; do not narrow the scope to only the quoted feedback.\n\n';
 
@@ -231,15 +266,35 @@ function createAuthorPrompt({ cwd, task, round, feedback }) {
   ].filter(Boolean).join('\n');
 }
 
-function createReviewerPrompt({ cwd, task, round, feedback, authorReply }) {
-  return [
+function createReviewerPrompt({ cwd, task, round, feedback, authorReply, quality }) {
+  const prompt = [
     `You are the REVIEWER. Round: ${round}`,
     '',
     `Original task: ${task}`,
     '',
     previousFeedbackSection(feedback).trimEnd(),
     authorReplySection(authorReply).trimEnd(),
-    `Inspect the whole project under ${cwd} using your filesystem tools.`,
+    quality === 'dev'
+      ? `Inspect the relevant project state under ${cwd} using your filesystem tools.`
+      : `Inspect the whole project under ${cwd} using your filesystem tools.`,
+  ];
+
+  if (quality === 'dev') {
+    prompt.push(
+      'Review whether the task is completed.',
+      '',
+      'Check:',
+      '1. The requested behavior is implemented.',
+      '2. The changes are coherent with the surrounding code.',
+      '3. Relevant validation was run when practical.',
+      '',
+      'Reply APPROVED on its own line if the task is completed.',
+      'Otherwise reply with a terse numbered list of concrete fixes needed.',
+    );
+    return prompt.filter(Boolean).join('\n');
+  }
+
+  prompt.push(
     'Review the current project state and relevant modifications as a whole, not only the files or summary mentioned by the AUTHOR.',
     'Judge whether the AUTHOR translated the quality bar into concrete execution: meaningful tests, adversarial coverage, realistic fixtures, and correct bug fixes wired into the surrounding code.',
     'Expect coverage that reflects real user experience: relevant unit, integration, scenario/use-case, and realistic end-to-end checks where the task touches those layers.',
@@ -247,7 +302,14 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply }) {
     'Do not assume nothing changed just because earlier rounds looked different.',
     'Reply APPROVED on its own line only if the project now fully solves the task, the tests are genuinely convincing, and no obvious bugs or omissions remain; otherwise reply with a terse numbered list of issues, each with concrete fix guidance when useful.',
     'Prefer actionable suggestions over questions; mention exact files, flows, or failure modes that still need work.',
-  ].filter(Boolean).join('\n');
+  );
+  return prompt.filter(Boolean).join('\n');
+}
+
+function resolveQuality(opts) {
+  const raw = String(opts.quality ?? process.env.SPAR_QUALITY ?? 'prod').trim().toLowerCase();
+  if (raw === 'prod' || raw === 'dev') return raw;
+  throw createConfigurationError(`Invalid quality "${raw}". Use "prod" or "dev".`);
 }
 
 function resolveRendererMode(opts) {

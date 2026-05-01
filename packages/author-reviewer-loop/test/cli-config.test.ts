@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseRunConfig } from '../lib/cli/config.mjs';
-import { modelChoicesForAgent } from '../lib/config/agents.mjs';
+import { formatStartupError } from '../lib/cli/error.mjs';
+import { agents, modelChoicesForAgent } from '../lib/config/agents.mjs';
 import { preferencesFilePath, readPreferences, writePreferences } from '../lib/config/preferences.mjs';
 import { formatRunSummary } from '../lib/cli/summary.mjs';
 import { commitSetupSelections, parseEditorCommand } from '../lib/renderers/tui.mjs';
@@ -21,6 +21,7 @@ beforeEach(() => {
   delete process.env.REVIEWER_MODEL;
   delete process.env.AUTHOR_SESSION_TURNS;
   delete process.env.REVIEWER_SESSION_TURNS;
+  delete process.env.SPAR_QUALITY;
   delete process.env.ACP_REVIEW_CLI;
   delete process.env.ACP_REVIEW_TUI;
 });
@@ -192,9 +193,24 @@ describe('author-reviewer-loop CLI config', () => {
     const config = parseConfig([tempDir(), 'Build the thing', '--yes']);
 
     expect(config.maxRounds).toBe(20);
+    expect(config.quality).toBe('prod');
     expect(config.authorSettings.sessionTurns).toBe(20);
     expect(config.reviewerSettings.sessionTurns).toBe(20);
     expect(config.wrap).toBe(true);
+  });
+
+  it('supports dev quality through environment and lets the CLI flag override it', () => {
+    process.env.SPAR_QUALITY = 'dev';
+    expect(parseConfig([tempDir(), 'Build the thing', '--yes']).quality).toBe('dev');
+
+    process.env.SPAR_QUALITY = 'prod';
+    expect(parseConfig([tempDir(), 'Build the thing', '--yes', '--quality', 'dev']).quality).toBe('dev');
+  });
+
+  it('rejects unsupported quality values', () => {
+    process.env.SPAR_QUALITY = 'fast';
+
+    expect(() => parseConfig([tempDir(), 'Build the thing', '--yes'])).toThrow('Invalid quality "fast". Use "prod" or "dev".');
   });
 
   it('reads independent role session turn limits from environment variables', () => {
@@ -244,21 +260,28 @@ describe('author-reviewer-loop CLI config', () => {
     ]);
   });
 
-  it('reports invalid startup config through the CLI formatter', () => {
-    const cwd = tempDir();
-    const bin = path.resolve('packages', 'author-reviewer-loop', 'bin', 'acp-author-reviewer-loop.mjs');
-    const result = spawnSync(process.execPath, [bin, cwd, 'Build the thing', '--yes', '--cli'], {
-      cwd: ORIGINAL_CWD,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        AUTHOR_AGENT: 'missing-agent',
-      },
-    });
+  it('runs Codex through Spar with real-workspace launch defaults', () => {
+    const expectedArgs = [
+      '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'approval_policy="never"',
+    ];
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('AUTHOR_AGENT=missing-agent is not supported');
-    expect(result.stderr).not.toContain('at envChoice');
+    expect(agents.codex.command).toBe('codex-acp');
+    expect(agents.codex.args).toEqual(expectedArgs);
+    expect(agents.codex.fallbackCommands?.[0]?.args).toEqual([
+      '--yes', '@zed-industries/codex-acp@latest', ...expectedArgs,
+    ]);
+  });
+
+  it('reports invalid startup config through the CLI formatter', () => {
+    const error = new Error('AUTHOR_AGENT=missing-agent is not supported. Use one of: claude, codex, copilot, gemini, opencode, qwen.');
+    error.name = 'ConfigurationError';
+
+    const formatted = formatStartupError(error);
+
+    expect(formatted).toContain('AUTHOR_AGENT=missing-agent is not supported');
+    expect(formatted).not.toContain('at envChoice');
+    expect(formatted.startsWith('Error: ')).toBe(true);
   });
 
   it('resolves relative and absolute task files once at startup', () => {
@@ -341,6 +364,20 @@ describe('author-reviewer-loop CLI config', () => {
     expect(prompt).toContain('existing project checks when practical');
   });
 
+  it('uses a lighter author prompt in dev quality', () => {
+    const config = parseConfig([tempDir(), 'build it', '--yes', '--cli', '--quality', 'dev']);
+    const firstPrompt = config.authorSettings.prompt({ round: 1, feedback: '' });
+    const followUpPrompt = config.authorSettings.prompt({ round: 2, feedback: '1. Missing validation' });
+
+    expect(firstPrompt).toContain('Work on the task using your code agent tools.');
+    expect(firstPrompt).toContain('Inspect the relevant project files and existing patterns.');
+    expect(firstPrompt).toContain('Implement the changes needed to complete the task.');
+    expect(firstPrompt).toContain('Run relevant validation when practical.');
+    expect(followUpPrompt).toContain('REVIEWER feedback:\n1. Missing validation');
+    expect(followUpPrompt).toContain('Continue the task using your code agent tools.');
+    expect(followUpPrompt).toContain('Apply the changes needed to address the feedback.');
+  });
+
   it('includes round and previous feedback in reviewer prompts', () => {
     const config = parseConfig([tempDir(), 'build it', '--yes', '--cli']);
     const prompt = config.reviewerSettings.prompt({ round: 2, feedback: '1. Missing tests' });
@@ -373,6 +410,18 @@ describe('author-reviewer-loop CLI config', () => {
     expect(prompt).toContain('Prefer actionable suggestions over questions');
     expect(prompt).toContain('Reject vanity tests, over-idealized mocks');
     expect(prompt).toContain('the tests are genuinely convincing');
+  });
+
+  it('uses task-completion review criteria in dev quality', () => {
+    const config = parseConfig([tempDir(), 'build it', '--yes', '--cli', '--quality', 'dev']);
+    const prompt = config.reviewerSettings.prompt({ round: 1, feedback: '', authorReply: 'changed files' });
+
+    expect(prompt).toContain('Inspect the relevant project state');
+    expect(prompt).toContain('Review whether the task is completed.');
+    expect(prompt).toContain('The requested behavior is implemented.');
+    expect(prompt).toContain('Relevant validation was run when practical.');
+    expect(prompt).toContain('Reply APPROVED on its own line if the task is completed.');
+    expect(prompt).toContain('Otherwise reply with a terse numbered list of concrete fixes needed.');
   });
 
   it('commits TUI selections to the configured preferences path while preserving env-locked sources', () => {
