@@ -481,6 +481,98 @@ describe('author-reviewer-loop engine', () => {
     expect(secondAuthorPrompt).toContain('treated as NOT APPROVED because it mixed APPROVED with conflicting issue text');
   });
 
+  it('captures and persists run events as a local session trace', async () => {
+    const lines: string[] = [];
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = {
+      ...config(1),
+      sessionTrace: {
+        enabled: true,
+        sessionId: 'test-session',
+        now: (() => {
+          let at = 1000;
+          return () => at += 1;
+        })(),
+        writeLine: (line: string) => lines.push(line),
+      },
+    };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, renderer }: { role: 'AUTHOR' | 'REVIEWER'; renderer: any }) => {
+      if (role === 'AUTHOR') {
+        renderer.onTraceEntry({ role, entry: { direction: 'sent', frame: 'author-wire' } });
+        renderer.onToolStart({ round: 1, role, toolCallId: 'tool-1', title: 'Run tests' });
+        return 'draft';
+      }
+      return 'APPROVED';
+    });
+
+    const result = await createLoopEngine({ config: cfg }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    const entries = lines.map((line) => JSON.parse(line));
+    expect(entries.at(0)).toMatchObject({ type: 'sessionStart', sessionId: 'test-session' });
+    expect(entries.some((entry) => entry.event?.type === 'traceEntry' && entry.event.entry.frame === 'author-wire')).toBe(true);
+    expect(entries.some((entry) => entry.event?.type === 'toolStart' && entry.event.toolCallId === 'tool-1')).toBe(true);
+    expect(entries.at(-1)).toMatchObject({ type: 'sessionEnd', status: 'completed', result: { approved: true, rounds: 1 } });
+  });
+
+  it('closes session traces with failed status when the run fails', async () => {
+    const lines: string[] = [];
+    const failure = new Error('author crashed');
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = {
+      ...config(1),
+      sessionTrace: { enabled: true, sessionId: 'failed-session', writeLine: (line: string) => lines.push(line) },
+    };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') throw failure;
+      return 'APPROVED';
+    });
+
+    await expect(createLoopEngine({ config: cfg }).run()).rejects.toThrow('author crashed');
+
+    const entries = lines.map((line) => JSON.parse(line));
+    expect(entries.some((entry) => entry.event?.type === 'error' && entry.event.error.message === 'author crashed')).toBe(true);
+    expect(entries.at(-1)).toMatchObject({
+      type: 'sessionEnd',
+      status: 'failed',
+      error: { message: 'author crashed' },
+      finalState: { hasError: true },
+    });
+  });
+
+  it('captures wire traces when session trace persistence is enabled even when TUI and trace logging are disabled', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = { ...config(1), tui: false, trace: false, sessionTrace: { enabled: true, writeLine: () => {} } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'APPROVED' : '',
+    );
+
+    await createLoopEngine({ config: cfg }).run();
+
+    expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'AUTHOR',
+      trace: false,
+      captureTrace: true,
+    }));
+    expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'REVIEWER',
+      trace: false,
+      captureTrace: true,
+    }));
+  });
+
   it('captures wire traces in TUI mode even when trace logging is disabled', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { PaneStatus, Phase, initialState, reduce } from './engine/state.mjs';
 import { closeRole, openRole } from './runtime/role.mjs';
 import { createStartupProfiler } from './runtime/startup-profile.mjs';
+import { createSessionTraceRecorder } from './runtime/session-trace.mjs';
 import { runTurn } from './runtime/turn.mjs';
 
 export { PaneStatus, Phase };
@@ -113,6 +114,7 @@ export function createLoopEngine({ config }) {
   const eventListeners = new Set();
   let nextFlowId = 1;
   let nextTraceId = 1;
+  let sessionTrace = null;
 
   function dispatch(action) {
     state = reduce(state, action);
@@ -125,6 +127,7 @@ export function createLoopEngine({ config }) {
 
   const publish = (event, action = event) => {
     if (action) dispatch(action);
+    sessionTrace?.record('event', { event, action });
     emit(event);
   };
 
@@ -188,6 +191,8 @@ export function createLoopEngine({ config }) {
 
   async function run() {
     const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
+    sessionTrace = createSessionTraceRecorder({ ...(config.sessionTrace || {}), cwd, config });
+    const captureTrace = Boolean(trace || tui || sessionTrace.enabled);
     const openRoleFn = config.openRole || openRole;
     const closeRoleFn = config.closeRole || closeRole;
     const retiredRoles = new Set();
@@ -205,7 +210,7 @@ export function createLoopEngine({ config }) {
         reviewerSettings,
         cwd,
         trace,
-        captureTrace: Boolean(trace || tui),
+        captureTrace,
         renderer: innerRenderer,
         openRole: openRoleFn,
       });
@@ -217,7 +222,7 @@ export function createLoopEngine({ config }) {
         closeRole: closeRoleFn,
         cwd,
         trace,
-        captureTrace: Boolean(trace || tui),
+        captureTrace,
         renderer: innerRenderer,
         maxTurns: authorSettings.sessionTurns,
         retiredRoles,
@@ -230,7 +235,7 @@ export function createLoopEngine({ config }) {
         closeRole: closeRoleFn,
         cwd,
         trace,
-        captureTrace: Boolean(trace || tui),
+        captureTrace,
         renderer: innerRenderer,
         maxTurns: reviewerSettings.sessionTurns,
         retiredRoles,
@@ -250,6 +255,10 @@ export function createLoopEngine({ config }) {
       runError = await normalizeStartupError({ startup, author: authorManager?.getActive(), error });
       const message = formatErrorMessage(runError);
       dispatch({ type: 'error', error: message });
+      sessionTrace?.record('event', {
+        event: { type: 'error', error: runError },
+        action: { type: 'error', error: message },
+      });
       emit({ type: 'error', error: runError });
     }
 
@@ -266,14 +275,28 @@ export function createLoopEngine({ config }) {
       startedRoles.filter((state) => !retiredRoles.has(state)),
     );
     if (!runError || startup?.rolesSettled?.()) stopLateRoleCleanup();
-    if (runError && closeError) {
-      throw new AggregateError(
+    const finalError = runError && closeError
+      ? new AggregateError(
         [runError, ...toErrorList(closeError)],
         'Author-reviewer loop failed and cleanup also failed.',
-      );
+      )
+      : runError || closeError;
+    if (finalError) {
+      sessionTrace?.close({
+        status: 'failed',
+        error: finalError,
+        runError,
+        closeError,
+        finalState: summarizeFinalState(state),
+      });
+    } else {
+      sessionTrace?.close({
+        status: 'completed',
+        result,
+        finalState: summarizeFinalState(state),
+      });
     }
-    if (runError) throw runError;
-    if (closeError) throw closeError;
+    if (finalError) throw finalError;
     return result;
   }
 
@@ -577,6 +600,17 @@ async function closeRoles(closeRoleFn, states) {
   if (errors.length === 0) return null;
   if (errors.length === 1) return toError(errors[0]);
   return new AggregateError(errors.map((error) => toError(error)), 'Failed to close author/reviewer roles.');
+}
+
+function summarizeFinalState(state) {
+  return {
+    phase: state?.phase,
+    rounds: state?.order?.length ?? 0,
+    selected: state?.selected ?? null,
+    traceEntries: state?.trace?.length ?? 0,
+    hasError: Boolean(state?.error),
+    result: state?.result ?? null,
+  };
 }
 
 function toErrorList(error) {
