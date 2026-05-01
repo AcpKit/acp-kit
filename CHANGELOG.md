@@ -8,6 +8,23 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-02
+
+### Added
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` adds `--quality prod|dev` and `SPAR_QUALITY`, keeping the existing production-grade adversarial prompt as `prod` while offering a lighter `dev` prompt that follows the default code-agent workflow.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` now records one Spar session lifecycle per invocation, persists run recovery checkpoints separately, and resumes interrupted author/reviewer/approval steps when the saved ACP role sessions are still available.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` adds deterministic process-level E2E coverage for Codex launch behavior, proving the real CLI starts `codex-acp` with real-workspace defaults and that the reviewer sees author disk writes.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` launches Codex with `sandbox_mode="danger-full-access"` and `approval_policy="never"` so AUTHOR writes land in the real workspace shared with REVIEWER instead of a temporary sandbox write layer.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` renames local diagnostic traces from ambiguous session traces to run traces under `~/.acp-kit/spar/run-traces`.
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` preserves streamed word chunks by default when agents split text or reasoning deltas mid-word, while still respecting explicit whitespace and punctuation boundaries.
+
 ## [0.6.17] - 2026-05-02
 
 ### Fixed

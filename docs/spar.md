@@ -13,7 +13,7 @@ them sparring until one approves the other's work:
   `APPROVED` or a numbered list of issues.
 
 The two agents share the same workspace, but **not** the same conversation
-history. Each role reuses its ACP session across turns until its configured session turn limit is reached. Spar loops until the reviewer approves the result or `MAX_ROUNDS`
+history. Each role reuses its ACP session across turns until its configured session turn limit is reached. Spar also persists resumable loop state locally and attempts to resume matching ACP sessions after an interrupted run. Spar loops until the reviewer approves the result or `MAX_ROUNDS`
 is reached. The deliverable is the working tree on disk, not pasted code.
 
 Spar is built on top of [`@acp-kit/core`](./getting-started.md) and ships as
@@ -68,6 +68,11 @@ After the initial confirmation, the demo approves agent file-system and
 terminal requests for the selected workspace so the loop can run unattended.
 **Use a disposable workspace and only run agents you trust.**
 
+When `codex` is selected, Spar launches `codex-acp` with
+`sandbox_mode="danger-full-access"` and `approval_policy="never"` so Codex
+writes to the real workspace that AUTHOR and REVIEWER share instead of a
+temporary sandbox write layer.
+
 Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the confirmation prompt in
 scripts.
 
@@ -107,9 +112,13 @@ Runtime controls:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
+| `SPAR_QUALITY` | `prod` | Prompt quality mode. `prod` keeps the production-grade/adversarial prompt; `dev` uses a lighter development prompt. |
 | `MAX_ROUNDS` | `20` | Maximum author/reviewer iterations. |
 | `AUTHOR_SESSION_TURNS` | `20` | Maximum AUTHOR turns to run in one ACP session before opening a fresh AUTHOR session. |
 | `REVIEWER_SESSION_TURNS` | `20` | Maximum REVIEWER turns to run in one ACP session before opening a fresh REVIEWER session. |
+| `SPAR_SESSION_RECORD` | on (off under Vitest) | Persist one Spar session lifecycle record under `~/.acp-kit/spar/sessions`. A Spar session is one invocation for one cwd/task lifecycle. |
+| `SPAR_RUN_RECOVERY` | on (off under Vitest) | Persist run recovery checkpoints under `~/.acp-kit/spar/run-recovery` and attempt interruption recovery on the next matching run. |
+| `SPAR_RUN_TRACE` | on (off under Vitest) | Persist diagnostic run traces under `~/.acp-kit/spar/run-traces`. |
 | `SPAR_WRAP_ENABLED` / `ACP_REVIEW_WRAP` | TUI on, CLI off | Explicitly enable or disable soft wrapping. |
 
 ## Renderers
@@ -172,7 +181,7 @@ Each round consists of two turns:
    because earlier rounds looked different.
 
 The loop stops when REVIEWER replies `APPROVED` on its own line, when
-`MAX_ROUNDS` is reached, or when the user cancels. AUTHOR and REVIEWER sessions refresh independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns. Pressing `f` after
+`MAX_ROUNDS` is reached, or when the user cancels. AUTHOR and REVIEWER sessions refresh independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns. If the process is interrupted, Spar persists the pending author turn, reviewer turn, or approval decision and tries to resume matching ACP sessions on the next run; if a saved session is stale, Spar falls back to a fresh session instead of failing startup. Pressing `f` after
 approval forces another round in the TUI.
 
 ## Diagnostics

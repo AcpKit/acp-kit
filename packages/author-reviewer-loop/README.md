@@ -12,7 +12,7 @@ A split-context ACP Kit demo that hosts two ACP agents over the same workspace:
 - **AUTHOR** modifies files for the requested task.
 - **REVIEWER** inspects the working tree in a separate context and replies `APPROVED` or a numbered list of issues.
 
-The two agents share the same workspace, but not the same conversation history. Each role reuses its ACP session across turns until its configured session turn limit is reached. The CLI loops until the reviewer approves the result or `MAX_ROUNDS` is reached. The deliverable is the working tree on disk, not pasted code.
+The two agents share the same workspace, but not the same conversation history. Each role reuses its ACP session across turns until its configured session turn limit is reached. Spar also persists resumable loop state locally and attempts to resume matching ACP sessions after an interrupted run when the agent still exposes them. The CLI loops until the reviewer approves the result or `MAX_ROUNDS` is reached. The deliverable is the working tree on disk, not pasted code.
 
 ## Run With One Command
 
@@ -31,6 +31,8 @@ Use an empty or disposable directory. The AUTHOR agent is allowed to create and 
 The task argument may be inline text or a relative/absolute path to a UTF-8 text file. If it resolves to a file, the task is read once at startup and that in-memory text is used for the rest of the run.
 
 After the initial confirmation, the demo approves agent file-system and terminal requests for the selected workspace so the loop can run unattended. Use a disposable workspace and only run agents you trust.
+
+When `codex` is selected, Spar launches `codex-acp` with `sandbox_mode="danger-full-access"` and `approval_policy="never"` so Codex writes to the real workspace that AUTHOR and REVIEWER share instead of a temporary sandbox write layer.
 
 Before launching agents, the CLI shows the full run configuration and asks for confirmation. Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the prompt in scripts.
 
@@ -100,7 +102,7 @@ Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`, `o
 ## Options
 
 ```bash
-npx @acp-kit/spar <cwd> <task-or-task-file> [--yes] [--cli]
+npx @acp-kit/spar <cwd> <task-or-task-file> [--yes] [--cli] [--quality prod|dev]
 ```
 
 The Ink-based fullscreen TUI is the default renderer. Pass `--cli` (or set `ACP_REVIEW_CLI=1`) to use the plain line-based renderer instead. `--tui` and `ACP_REVIEW_TUI=1` are still accepted for compatibility.
@@ -144,6 +146,7 @@ The plain console renderer also includes tool command/output previews and collap
 ## Prompt Contract
 
 - The AUTHOR prompt is intentionally opinionated: it asks the coding agent to turn vague quality bars into concrete work on disk, use adversarial thinking before implementation, prefer meaningful unit/integration/scenario/E2E coverage over vanity tests, and fix real bugs at the root cause when testing exposes them.
+- Pass `--quality dev` or set `SPAR_QUALITY=dev` for a lighter development prompt that keeps the AUTHOR/REVIEWER loop but asks for the normal code-agent workflow: inspect, implement, validate when practical, and summarize.
 - The REVIEWER prompt evaluates the whole workspace against that same bar instead of rubber-stamping local diffs or happy-path checks.
 - The failure-oriented checklist that informed these prompts lives in [`docs/adversarial-scenarios.md`](../../docs/adversarial-scenarios.md).
 
@@ -170,9 +173,13 @@ Environment variables:
 | `AUTHOR_MODEL` | TUI: saved/choose; CLI: `gpt-5.4` | Model id passed via ACP `session/set_model`; set empty to skip. |
 | `REVIEWER_AGENT` | TUI: saved/choose; CLI: `codex` | Agent that reviews the working tree. |
 | `REVIEWER_MODEL` | TUI: saved/choose; CLI: `gpt-5.5` | Model id passed via ACP `session/set_model`; set empty to skip. |
+| `SPAR_QUALITY` | `prod` | Prompt quality mode. `prod` keeps the production-grade/adversarial prompt; `dev` uses a lighter development prompt. |
 | `MAX_ROUNDS` | `20` | Maximum author/reviewer iterations. |
 | `AUTHOR_SESSION_TURNS` | `20` | Maximum AUTHOR turns to run in one ACP session before opening a fresh AUTHOR session. |
 | `REVIEWER_SESSION_TURNS` | `20` | Maximum REVIEWER turns to run in one ACP session before opening a fresh REVIEWER session. |
+| `SPAR_SESSION_RECORD` | on (off under Vitest) | Persist one Spar session lifecycle record under `~/.acp-kit/spar/sessions`. A Spar session is one invocation for one cwd/task lifecycle. |
+| `SPAR_RUN_RECOVERY` | on (off under Vitest) | Persist run recovery checkpoints under `~/.acp-kit/spar/run-recovery` and attempt interruption recovery on the next matching run. |
+| `SPAR_RUN_TRACE` | on (off under Vitest) | Persist diagnostic run traces under `~/.acp-kit/spar/run-traces`. |
 | `ACP_REVIEW_YES` | unset | Set to `1` to skip the confirmation prompt. |
 | `ACP_REVIEW_CLI` | unset | Set to `1` to use the plain line-based renderer (same as `--cli`). |
 | `ACP_REVIEW_TUI` | unset | Compatibility flag for the default Ink TUI renderer (same as `--tui`). |
@@ -184,6 +191,8 @@ Environment variables:
 - Two `createAcpRuntime(...)` instances, one per agent process.
 - Two sessions pointed at the same `cwd`, with separate author/reviewer contexts.
 - Independent per-role session refresh limits via `AUTHOR_SESSION_TURNS` and `REVIEWER_SESSION_TURNS` (default `20` each).
+- Spar session records for each invocation lifecycle, stored separately from run recovery checkpoints.
+- Local run recovery that checkpoints the next pending author/reviewer/approval step and resumes matching ACP role sessions through ACP `session/load` when the agent still has them.
 - Per-session model selection via ACP `session/set_model`.
 - Startup model validation against each agent's advertised model list when available.
 - Handler-map dispatch over normalized `RuntimeSessionEvent`s.

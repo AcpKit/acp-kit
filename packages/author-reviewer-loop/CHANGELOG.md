@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-02
+
+### Added
+
+- Added `--quality prod|dev` and `SPAR_QUALITY`. `prod` keeps the existing production-grade adversarial prompt; `dev` uses a lighter prompt closer to the default code-agent workflow.
+- Added Spar session lifecycle records, separate run recovery checkpoints, and interrupted-run resume for pending author turns, reviewer turns, and approval decisions when saved ACP role sessions can still be loaded.
+- Added a process-level Codex launch E2E test that runs the real Spar CLI against a fake `codex-acp`, verifying real launch arguments and real workspace disk visibility between AUTHOR and REVIEWER.
+
+### Changed
+
+- Codex now launches with `sandbox_mode="danger-full-access"` and `approval_policy="never"` so edits are written to the shared real workspace rather than a temporary sandbox write layer.
+- Local diagnostic traces are now named run traces and stored separately from Spar session records and run recovery files.
+
+### Fixed
+
+- Streaming text and reasoning deltas now preserve mid-word chunks such as `he` + `llo` and `itera` + `tion`, while explicit whitespace and punctuation continue to create visible boundaries.
+
 ## [0.6.17] - 2026-05-02
 
 ### Fixed
