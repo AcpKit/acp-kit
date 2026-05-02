@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { summarizeRealWorkspacePolicy } from './real-workspace.mjs';
 
 export const RUN_TRACE_DIR_NAME = 'run-traces';
 export const RUN_TRACE_ENV = 'SPAR_RUN_TRACE';
@@ -145,5 +146,6 @@ function summarizeRoleSettings(settings = {}) {
     agentName: settings.agent?.displayName,
     model: settings.model ?? null,
     sessionTurns: settings.sessionTurns,
+    realWorkspace: summarizeRealWorkspacePolicy(settings.agent),
   };
 }

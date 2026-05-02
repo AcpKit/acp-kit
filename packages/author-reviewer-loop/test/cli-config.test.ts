@@ -426,6 +426,10 @@ describe('author-reviewer-loop CLI config', () => {
 
     expect(prompt).toContain("AUTHOR's reply for this round");
     expect(prompt).toContain('I edited foo.ts and bar.ts to add validation.');
+    expect(prompt).toContain('Use the AUTHOR reply as a report of claimed work, not as evidence.');
+    expect(prompt).toContain('Double-check claimed changes against the actual project files before judging.');
+    expect(prompt).toContain('If this workspace is a git repository, git status/diff can help identify changes');
+    expect(prompt).toContain('if it is not a git repository, inspect the relevant files directly instead.');
     expect(prompt).toContain('Review the current project state and relevant modifications as a whole');
     expect(prompt).toContain('not only the files or summary mentioned by the AUTHOR');
     expect(prompt).toContain('translated the quality bar into concrete execution');

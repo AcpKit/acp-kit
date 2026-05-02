@@ -290,6 +290,8 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, quality
     quality === 'dev'
       ? `Inspect the relevant project state under ${cwd} using your filesystem tools.`
       : `Inspect the whole project under ${cwd} using your filesystem tools.`,
+    'Use the AUTHOR reply as a report of claimed work, not as evidence. Double-check claimed changes against the actual project files before judging.',
+    'If this workspace is a git repository, git status/diff can help identify changes; if it is not a git repository, inspect the relevant files directly instead.',
   ];
 
   if (quality === 'dev') {

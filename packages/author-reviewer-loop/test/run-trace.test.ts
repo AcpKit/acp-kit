@@ -57,8 +57,8 @@ describe('Spar run trace persistence', () => {
         maxRounds: 2,
         trace: false,
         tui: true,
-        authorSettings: { agent: { id: 'codex', displayName: 'Codex' }, model: 'gpt-5.5', sessionTurns: 20 },
-        reviewerSettings: { agent: { id: 'copilot', displayName: 'Copilot' }, model: 'gpt-5.4', sessionTurns: 10 },
+        authorSettings: { agent: { id: 'codex-cli', displayName: 'Codex' }, model: 'gpt-5.5', sessionTurns: 20 },
+        reviewerSettings: { agent: { id: 'claude-code', displayName: 'Claude Code' }, model: 'opus', sessionTurns: 10 },
       },
       writeLine: (line) => lines.push(line),
     });
@@ -71,7 +71,21 @@ describe('Spar run trace persistence', () => {
 
     const entries = lines.map((line) => JSON.parse(line));
     expect(entries.map((entry) => entry.type)).toEqual(['runStart', 'event', 'runEnd']);
-    expect(entries[0]).toMatchObject({ runTraceId: 'run-trace-1', cwd: '/workspace/project', config: { tui: true, author: { agent: 'codex' } } });
+    expect(entries[0]).toMatchObject({
+      runTraceId: 'run-trace-1',
+      cwd: '/workspace/project',
+      config: {
+        tui: true,
+        author: {
+          agent: 'codex-cli',
+          realWorkspace: { launchArgs: expect.arrayContaining(['sandbox_mode=\"danger-full-access\"']) },
+        },
+        reviewer: {
+          agent: 'claude-code',
+          realWorkspace: { env: { IS_SANDBOX: '1' }, sessionMode: 'bypassPermissions' },
+        },
+      },
+    });
     expect(entries[1]).toMatchObject({ event: { type: 'traceEntry', role: 'AUTHOR' }, action: { traceId: 1 } });
     expect(entries[2]).toMatchObject({ status: 'completed', result: { approved: true, rounds: 1 } });
   });

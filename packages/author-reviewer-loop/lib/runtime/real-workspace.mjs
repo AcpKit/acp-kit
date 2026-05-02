@@ -49,6 +49,16 @@ export async function enforceRealWorkspaceSession({ role, session, settings, emi
   }
 }
 
+export function summarizeRealWorkspacePolicy(agent) {
+  const policy = realWorkspacePolicyForAgent(agent);
+  if (!policy) return null;
+  return {
+    launchArgs: policy.launchArgs ? [...policy.launchArgs] : undefined,
+    env: policy.env ? { ...policy.env } : undefined,
+    sessionMode: policy.sessionMode ?? undefined,
+  };
+}
+
 export function realWorkspacePolicyForAgent(agent) {
   return policies[agent?.id] ?? null;
 }
