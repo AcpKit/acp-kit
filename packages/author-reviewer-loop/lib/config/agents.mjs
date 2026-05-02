@@ -6,27 +6,13 @@ import {
   OpenCode,
   QwenCode,
 } from '@acp-kit/core';
+import { withRealWorkspaceDefaults } from '../runtime/real-workspace.mjs';
 
-const codexRealWorkspaceArgs = Object.freeze([
-  '-c', 'sandbox_mode="danger-full-access"',
-  '-c', 'approval_policy="never"',
-]);
-
-function withCodexRealWorkspaceDefaults(agent) {
-  return {
-    ...agent,
-    args: [...agent.args, ...codexRealWorkspaceArgs],
-    fallbackCommands: (agent.fallbackCommands ?? []).map((fallback) => ({
-      ...fallback,
-      args: [...fallback.args, ...codexRealWorkspaceArgs],
-    })),
-  };
-}
-
-export const SparCodexCli = withCodexRealWorkspaceDefaults(CodexCli);
+export const SparClaudeCode = withRealWorkspaceDefaults(ClaudeCode);
+export const SparCodexCli = withRealWorkspaceDefaults(CodexCli);
 
 export const agents = {
-  claude: ClaudeCode,
+  claude: SparClaudeCode,
   codex: SparCodexCli,
   copilot: GitHubCopilot,
   gemini: GeminiCli,

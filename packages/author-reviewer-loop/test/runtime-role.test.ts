@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     shutdown: vi.fn(),
   },
   session: {
+    setMode: vi.fn(),
     setModel: vi.fn(),
     close: vi.fn(),
     dispose: vi.fn(),
@@ -68,7 +69,9 @@ describe('runtime role adapter', () => {
     mocks.runtime.newSession.mockReset();
     mocks.runtime.loadSession.mockReset();
     mocks.runtime.shutdown.mockReset();
+    mocks.session.setMode.mockReset();
     mocks.session.setModel.mockReset();
+    mocks.session.transcript = { session: { models: { availableModels: [{ id: 'good-model' }] } } };
     mocks.session.close.mockReset();
     mocks.session.dispose.mockReset();
     mocks.terminalHost.terminals = new Map();
@@ -89,6 +92,7 @@ describe('runtime role adapter', () => {
     mocks.createAcpRuntime.mockReturnValue(mocks.runtime);
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
     mocks.runtime.loadSession.mockResolvedValue(mocks.session);
+    mocks.session.setMode.mockResolvedValue(undefined);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
     mocks.session.close.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
@@ -166,6 +170,71 @@ describe('runtime role adapter', () => {
     });
 
     await state.close();
+  });
+
+
+  it('sets Claude Code sessions to real-workspace mode before setting the model', async () => {
+    const onRoleStatus = vi.fn();
+    mocks.session.transcript = {
+      session: {
+        models: { availableModels: [{ id: 'good-model' }] },
+        modes: {
+          currentModeId: 'default',
+          availableModes: [
+            { id: 'default', name: 'Default' },
+            { id: 'bypassPermissions', name: 'Bypass Permissions' },
+          ],
+        },
+      },
+    };
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      settings: {
+        agent: { id: 'claude-code', displayName: 'Claude Code', command: 'claude-code-acp', args: [] },
+        model: 'good-model',
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.session.setMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(mocks.session.setMode.mock.invocationCallOrder[0]).toBeLessThan(mocks.session.setModel.mock.invocationCallOrder[0]);
+    expect(onRoleStatus).toHaveBeenCalledWith({ role: 'AUTHOR', message: 'session ready, setting real-workspace mode bypassPermissions...' });
+
+    await state.close();
+  });
+
+  it('fails fast when Claude Code does not expose the required real-workspace mode', async () => {
+    mocks.session.transcript = {
+      session: {
+        models: { availableModels: [{ id: 'good-model' }] },
+        modes: {
+          currentModeId: 'default',
+          availableModes: [{ id: 'default', name: 'Default' }],
+        },
+      },
+    };
+
+    await expect(openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { id: 'claude-code', displayName: 'Claude Code', command: 'claude-code-acp', args: [] },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    })).rejects.toThrow('cannot be forced into real-workspace mode "bypassPermissions"');
+
+    expect(mocks.session.setMode).not.toHaveBeenCalled();
+    expect(mocks.session.close).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
   });
 
   it('resumes a saved ACP session when recovery metadata provides a session id', async () => {

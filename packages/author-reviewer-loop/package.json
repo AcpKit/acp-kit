@@ -1,6 +1,6 @@
 {
   "name": "@acp-kit/spar",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Spar — two ACP agents (an author and a reviewer) sparring over the same workspace until the work is approved. Built on @acp-kit/core.",
   "type": "module",
   "bin": {
@@ -46,7 +46,7 @@
     "node": ">=20.11"
   },
   "dependencies": {
-    "@acp-kit/core": "^0.7.0",
+    "@acp-kit/core": "^0.7.1",
     "commander": "^14.0.3"
   },
   "optionalDependencies": {

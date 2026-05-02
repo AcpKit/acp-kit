@@ -32,7 +32,7 @@ The task argument may be inline text or a relative/absolute path to a UTF-8 text
 
 After the initial confirmation, the demo approves agent file-system and terminal requests for the selected workspace so the loop can run unattended. Use a disposable workspace and only run agents you trust.
 
-When `codex` is selected, Spar launches `codex-acp` with `sandbox_mode="danger-full-access"` and `approval_policy="never"` so Codex writes to the real workspace that AUTHOR and REVIEWER share instead of a temporary sandbox write layer.
+When `codex` is selected, Spar launches `codex-acp` with `sandbox_mode="danger-full-access"` and `approval_policy="never"` so Codex writes to the real workspace that AUTHOR and REVIEWER share instead of a temporary sandbox write layer. When `claude` is selected, Spar enables Claude Code bypass mode in sandboxed/root environments and switches the session to `bypassPermissions` before the first turn for the same real-workspace guarantee.
 
 Before launching agents, the CLI shows the full run configuration and asks for confirmation. Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the prompt in scripts.
 

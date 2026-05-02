@@ -8,6 +8,16 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-02
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` now applies real-workspace defaults through one Spar adapter for Codex and Claude Code. Codex keeps the full-access/no-approval launch flags, while Claude Code runs with `IS_SANDBOX=1` and is switched to `bypassPermissions` before the first AUTHOR turn so edits land on the shared workspace disk instead of an agent-local review layer.
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` fixes globally installed `spar --version` and `spar -v`, and help now displays the installed `spar` command name.
+
 ## [0.7.0] - 2026-05-02
 
 ### Added
