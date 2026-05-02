@@ -60,7 +60,8 @@ describe('Spar Codex launch E2E', () => {
       const launches = entries.filter((entry) => entry.event === 'launch');
       expect(launches.length).toBeGreaterThanOrEqual(2);
       for (const launch of launches) {
-        expect(launch.argv).toEqual(expect.arrayContaining([
+        const argv = Array.isArray(launch.argv) ? launch.argv.map(normalizeCommandShimArg) : launch.argv;
+        expect(argv).toEqual(expect.arrayContaining([
           '-c',
           'sandbox_mode="danger-full-access"',
           '-c',
@@ -201,6 +202,12 @@ async function writeFakeAgentExecutable(filePath: string, source: string): Promi
     `@echo off\r\n"${process.execPath}" "%~dp0${path.basename(scriptPath)}" %*\r\n`,
     'utf8',
   );
+}
+
+function normalizeCommandShimArg(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (!value.startsWith('"') || !value.endsWith('"')) return value;
+  return value.slice(1, -1).replace(/\\"/g, '"');
 }
 
 function runNode(args: string[], options: {
