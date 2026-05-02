@@ -1,15 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { agents, defaults } from '../config/agents.mjs';
 import { readPreferences, normalizePreferences, preferencesFilePath as defaultPreferencesFilePath } from '../config/preferences.mjs';
 import { env, envFlag, envPositiveInt, envStrictPositiveInt } from './env.mjs';
 
+const packageJsonPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
+
 export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
   let parsedArgs;
   const program = new Command()
-    .name('author-reviewer-loop')
+    .name('spar')
     .description('Run split-context AUTHOR and REVIEWER ACP agents over one workspace.')
     .usage('<cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]')
     .argument('<cwd>', 'workspace directory')
@@ -18,6 +21,7 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
     .option('--cli', 'use the plain line-based renderer instead of the default TUI')
     .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
     .option('--quality <quality>', 'quality level: prod|dev')
+    .version(readPackageVersion(), '-v, --version', 'output the current version')
     .addHelpText('after', `
 Environment:
   AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   TUI: no built-in default; CLI default: ${defaults.authorAgent}
@@ -120,6 +124,15 @@ Environment:
     ? (wrapEnvConfigured ? wrapEnvEnabled : true)
     : wrapEnvEnabled;
   return config;
+}
+
+function readPackageVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
 }
 
 export function applyRoleSelection(config, { author, reviewer }) {

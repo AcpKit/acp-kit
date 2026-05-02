@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseRunConfig } from '../lib/cli/config.mjs';
 import { formatStartupError } from '../lib/cli/error.mjs';
@@ -12,6 +13,8 @@ import { commitSetupSelections, parseEditorCommand } from '../lib/renderers/tui.
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_CWD = process.cwd();
 const TEMP_DIRS: string[] = [];
+const CLI_BIN = path.resolve('packages', 'author-reviewer-loop', 'bin', 'acp-author-reviewer-loop.mjs');
+const PACKAGE_VERSION = JSON.parse(fs.readFileSync(path.resolve('packages', 'author-reviewer-loop', 'package.json'), 'utf8')).version;
 
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
@@ -46,6 +49,33 @@ function parseConfig(argv, preferences = {}) {
 }
 
 describe('author-reviewer-loop CLI config', () => {
+  it('prints the package version from the installed CLI entry point', () => {
+    for (const flag of ['--version', '-v']) {
+      const result = spawnSync(process.execPath, [CLI_BIN, flag], {
+        cwd: ORIGINAL_CWD,
+        encoding: 'utf8',
+        env: { ...process.env, SPAR_NO_UPDATE_CHECK: '1' },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(PACKAGE_VERSION);
+      expect(result.stderr).toBe('');
+    }
+  });
+
+  it('prints help using the installed spar command name', () => {
+    const result = spawnSync(process.execPath, [CLI_BIN, '--help'], {
+      cwd: ORIGINAL_CWD,
+      encoding: 'utf8',
+      env: { ...process.env, SPAR_NO_UPDATE_CHECK: '1' },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Usage: spar <cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]');
+    expect(result.stdout).toContain('-v, --version');
+    expect(result.stderr).toBe('');
+  });
+
   it('uses the TUI renderer by default and --cli opts into the plain renderer', () => {
     const cwd = tempDir();
 
