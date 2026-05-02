@@ -185,7 +185,22 @@ function record(entry) {
   fs.appendFileSync(logFile, JSON.stringify({ ...entry, pid: process.pid }) + '\n', 'utf8');
 }
 `;
-  await fs.writeFile(filePath, source, { mode: 0o755 });
+  await writeFakeAgentExecutable(filePath, source);
+}
+
+async function writeFakeAgentExecutable(filePath: string, source: string): Promise<void> {
+  if (process.platform !== 'win32') {
+    await fs.writeFile(filePath, source, { mode: 0o755 });
+    return;
+  }
+
+  const scriptPath = `${filePath}.mjs`;
+  await fs.writeFile(scriptPath, source, 'utf8');
+  await fs.writeFile(
+    `${filePath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0${path.basename(scriptPath)}" %*\r\n`,
+    'utf8',
+  );
 }
 
 function runNode(args: string[], options: {

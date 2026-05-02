@@ -77,7 +77,22 @@ describe('Spar Claude Code real-workspace E2E', () => {
 
 async function writeFakeClaudeAcp(filePath: string): Promise<void> {
   const source = fakeClaudeAcpSource();
-  await fs.writeFile(filePath, source, { mode: 0o755 });
+  await writeFakeAgentExecutable(filePath, source);
+}
+
+async function writeFakeAgentExecutable(filePath: string, source: string): Promise<void> {
+  if (process.platform !== 'win32') {
+    await fs.writeFile(filePath, source, { mode: 0o755 });
+    return;
+  }
+
+  const scriptPath = `${filePath}.mjs`;
+  await fs.writeFile(scriptPath, source, 'utf8');
+  await fs.writeFile(
+    `${filePath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0${path.basename(scriptPath)}" %*\r\n`,
+    'utf8',
+  );
 }
 
 function fakeClaudeAcpSource(): string {
