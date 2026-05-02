@@ -3,35 +3,64 @@ const codexRealWorkspaceArgs = Object.freeze([
   '-c', 'approval_policy="never"',
 ]);
 
-const policies = Object.freeze({
-  'codex-cli': Object.freeze({
+export const realWorkspacePolicyRegistry = Object.freeze({
+  'codex-cli': createRealWorkspacePolicy({
+    id: 'codex-cli',
     launchArgs: codexRealWorkspaceArgs,
+    diagnostics: 'Codex runs with sandbox_mode="danger-full-access" and approval_policy="never".',
   }),
-  'claude-code': Object.freeze({
+  'claude-code': createRealWorkspacePolicy({
+    id: 'claude-code',
     env: Object.freeze({ IS_SANDBOX: '1' }),
     sessionMode: 'bypassPermissions',
+    diagnostics: 'Claude Code runs with IS_SANDBOX=1 and session mode bypassPermissions.',
   }),
 });
+
+function createRealWorkspacePolicy({ id, launchArgs, env, sessionMode, diagnostics }) {
+  return Object.freeze({
+    id,
+    adaptLaunchProfile(agent) {
+      return {
+        ...agent,
+        args: [...(agent.args ?? []), ...(launchArgs ?? [])],
+        env: env ? { ...(agent.env ?? {}), ...env } : agent.env,
+        fallbackCommands: (agent.fallbackCommands ?? []).map((fallback) => ({
+          ...fallback,
+          args: [...fallback.args, ...(launchArgs ?? [])],
+        })),
+      };
+    },
+    async setupSession({ role, session, settings, emitRoleStatus }) {
+      if (!sessionMode) return;
+      await setRequiredSessionMode({ role, session, settings, modeId: sessionMode, emitRoleStatus });
+    },
+    diagnosticsSummary() {
+      return {
+        launchArgs: launchArgs ? [...launchArgs] : undefined,
+        env: env ? { ...env } : undefined,
+        sessionMode: sessionMode ?? undefined,
+        summary: diagnostics,
+      };
+    },
+    launchArgs,
+    env,
+    sessionMode,
+  });
+}
 
 export function withRealWorkspaceDefaults(agent) {
   const policy = realWorkspacePolicyForAgent(agent);
   if (!policy) return agent;
-
-  return {
-    ...agent,
-    args: [...(agent.args ?? []), ...(policy.launchArgs ?? [])],
-    env: policy.env ? { ...(agent.env ?? {}), ...policy.env } : agent.env,
-    fallbackCommands: (agent.fallbackCommands ?? []).map((fallback) => ({
-      ...fallback,
-      args: [...fallback.args, ...(policy.launchArgs ?? [])],
-    })),
-  };
+  return policy.adaptLaunchProfile(agent);
 }
 
 export async function enforceRealWorkspaceSession({ role, session, settings, emitRoleStatus }) {
-  const modeId = realWorkspaceSessionModeForAgent(settings?.agent);
-  if (!modeId) return;
+  const policy = realWorkspacePolicyForAgent(settings?.agent);
+  await policy?.setupSession?.({ role, session, settings, emitRoleStatus });
+}
 
+async function setRequiredSessionMode({ role, session, settings, modeId, emitRoleStatus }) {
   const modes = getAvailableModes(session);
   if (modes.length > 0 && !modes.some((mode) => mode.id === modeId)) {
     throw createConfigurationError(
@@ -52,15 +81,11 @@ export async function enforceRealWorkspaceSession({ role, session, settings, emi
 export function summarizeRealWorkspacePolicy(agent) {
   const policy = realWorkspacePolicyForAgent(agent);
   if (!policy) return null;
-  return {
-    launchArgs: policy.launchArgs ? [...policy.launchArgs] : undefined,
-    env: policy.env ? { ...policy.env } : undefined,
-    sessionMode: policy.sessionMode ?? undefined,
-  };
+  return policy.diagnosticsSummary();
 }
 
 export function realWorkspacePolicyForAgent(agent) {
-  return policies[agent?.id] ?? null;
+  return realWorkspacePolicyRegistry[agent?.id] ?? null;
 }
 
 export function realWorkspaceSessionModeForAgent(agent) {

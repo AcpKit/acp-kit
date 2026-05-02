@@ -73,8 +73,19 @@ When `codex` is selected, Spar launches `codex-acp` with
 writes to the real workspace that AUTHOR and REVIEWER share instead of a
 temporary sandbox write layer.
 
+When `claude` is selected, Spar starts Claude Code with `IS_SANDBOX=1` and
+switches the session to `bypassPermissions` before the first turn. This keeps
+Claude edits on the shared workspace disk as well.
+
 Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the confirmation prompt in
 scripts.
+
+Pass `--doctor` to run local diagnostics for the selected workspace and role
+configuration without starting AUTHOR or REVIEWER agents:
+
+```bash
+npx @acp-kit/spar ./demo-workspace --doctor
+```
 
 ## Requirements
 
@@ -184,12 +195,29 @@ The loop stops when REVIEWER replies `APPROVED` on its own line, when
 `MAX_ROUNDS` is reached, or when the user cancels. AUTHOR and REVIEWER sessions refresh independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns. If the process is interrupted, Spar persists the pending author turn, reviewer turn, or approval decision and tries to resume matching ACP sessions on the next run; if a saved session is stale, Spar falls back to a fresh session instead of failing startup. Pressing `f` after
 approval forces another round in the TUI.
 
+After every AUTHOR turn, Spar summarizes observed disk changes and passes that
+summary into the REVIEWER prompt. In git workspaces it uses `git status`,
+`git diff --name-only`, index blob checks, and content signatures for dirty
+files, so changes are still reported when the AUTHOR commits and leaves a clean
+working tree or edits a file that was already dirty before the turn. Outside git
+workspaces, Spar compares filesystem snapshots.
+
+For stress runs, `--danger-ignore-approval` intentionally ignores REVIEWER
+approval and runs all configured `MAX_ROUNDS` rounds. This flag is not saved to
+preferences and cannot be enabled non-interactively; startup requires typing
+both `RUN ALL ROUNDS` and `IGNORE APPROVAL`, even when `--yes` is present.
+
 ## Diagnostics
 
 | Variable                  | Effect                                                                                            |
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `ACP_REVIEW_TRACE=1`      | Print inspector trace on startup failures.                                                        |
 | `ACP_REVIEW_DEBUG_USAGE=1` | Write each received `session.usage.updated` event to stderr, useful when debugging missing token counts. |
+
+Failure output also includes the run trace path, recovery checkpoint path,
+real-workspace policy summary, recent tool calls, and the latest workspace
+change summary when those are available. Interrupted-run recovery asks before
+resuming and defaults to starting fresh.
 
 ## Architecture
 

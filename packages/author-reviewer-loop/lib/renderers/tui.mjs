@@ -8,7 +8,9 @@ import { createLoopEngine, PaneStatus, Phase } from '../engine.mjs';
 import { applyRoleSelection } from '../cli/config.mjs';
 import { agentChoices, defaultModelForAgent, modelChoicesForAgent } from '../config/agents.mjs';
 import { writePreferences } from '../config/preferences.mjs';
+import { formatRecoveryPromptSummary } from '../cli/confirm.mjs';
 import { createStartupProfiler } from '../runtime/startup-profile.mjs';
+import { createRunRecoveryStore } from '../runtime/run-recovery.mjs';
 
 const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
 const ENGINE_RENDER_FRAME_MS = 250;
@@ -514,6 +516,7 @@ export function formatTuiConfirmSummaryRows(config = {}) {
 export function shouldPatchTuiChrome({ state, view } = {}) {
   return !(
     view?.screen !== 'flow'
+    || view?.awaitingRecoveryConfirm
     || view?.awaitingSetup
     || view?.awaitingConfirm
     || view?.editingTask
@@ -521,6 +524,10 @@ export function shouldPatchTuiChrome({ state, view } = {}) {
     || state?.phase === Phase.Done
     || state?.phase === Phase.Error
   );
+}
+
+export function formatTuiRecoveryPromptRows(recoveryState) {
+  return formatRecoveryPromptSummary(recoveryState).split('\n').filter(Boolean);
 }
 
 /**
@@ -743,6 +750,9 @@ export async function runTui({ config }) {
     resolveApproval(formatTuiForceContinueDecision(config.task));
   }
 
+  const runRecoveryStore = createRunRecoveryStore({ ...(config.runRecovery || {}), config });
+  const pendingRunRecovery = runRecoveryStore.load?.() || null;
+  config.runRecovery = { ...(config.runRecovery || {}), store: runRecoveryStore };
   let engine = null;
 
   // -- TTY guard -----------------------------------------------------------
@@ -1398,6 +1408,7 @@ export async function runTui({ config }) {
     focus: 'AUTHOR',   // which pane is active for scrolling
     screen: 'flow',     // flow | trace | tool | taskConfirm | finishing
     setup: initialSetup,
+    awaitingRecoveryConfirm: Boolean(pendingRunRecovery),
     awaitingSetup: !config.skipConfirm || initialSetup.required,
     selectedTool: null, // { round, role, toolCallId } used by the tool detail view
     pendingTask: null,
@@ -1420,6 +1431,11 @@ export async function runTui({ config }) {
   };
   function viewReducer(s, a) {
     switch (a.type) {
+      case 'resumeRecovery':
+        return { ...s, awaitingRecoveryConfirm: false };
+      case 'discardRecovery':
+        runRecoveryStore.clear?.();
+        return { ...s, awaitingRecoveryConfirm: false };
       case 'setupMove':
         return { ...s, setup: moveSetupCursor(s.setup, a.delta) };
       case 'setupBack':
@@ -1585,7 +1601,7 @@ export async function runTui({ config }) {
     if (action.type === 'result' || action.type === 'error') return true;
     if (action.type === 'turnSnapshot') return false;
     if (action.type === 'traceEntry') return viewState.screen === 'trace';
-    if (viewState.awaitingSetup || viewState.awaitingConfirm || viewState.editingTask || viewState.cancelled) return false;
+    if (viewState.awaitingRecoveryConfirm || viewState.awaitingSetup || viewState.awaitingConfirm || viewState.editingTask || viewState.cancelled) return false;
     if (viewState.screen === 'trace') return false;
     if (viewState.screen === 'task' || viewState.screen === 'taskConfirm' || viewState.screen === 'error' || viewState.screen === 'finishing') return false;
 
@@ -1769,7 +1785,7 @@ export async function runTui({ config }) {
     }, [stdout]);
 
     useEffect(() => {
-      if (view.awaitingSetup) return undefined;
+      if (view.awaitingRecoveryConfirm || view.awaitingSetup) return undefined;
       let timeout = null;
       let pending = false;
       const flush = () => {
@@ -1797,6 +1813,7 @@ export async function runTui({ config }) {
         if (timeout) clearTimeout(timeout);
       };
     }, [
+      view.awaitingRecoveryConfirm,
       view.awaitingSetup,
       view.awaitingConfirm,
       view.editingTask,
@@ -1828,7 +1845,7 @@ export async function runTui({ config }) {
         setTerminalTitle(formatTuiTerminalTitle({
           state: latestState,
           frame,
-          awaitingSetup: view.awaitingSetup,
+          awaitingSetup: view.awaitingRecoveryConfirm || view.awaitingSetup,
           awaitingConfirm: view.awaitingConfirm,
           editingTask: view.editingTask,
           screen: view.screen,
@@ -1841,7 +1858,7 @@ export async function runTui({ config }) {
       if (view.screen === 'finishing' || view.cancelled || state.phase === Phase.Done || state.phase === Phase.Error) return undefined;
       const interval = setInterval(write, Math.min(TUI_TITLE_FRAME_MS, TUI_CHROME_FRAME_MS));
       return () => clearInterval(interval);
-    }, [state.phase, state.latest, state.result?.approved, view.awaitingSetup, view.awaitingConfirm, view.editingTask, view.screen, view.cancelled, view.selected, view.focus, size.rows, size.cols]);
+    }, [state.phase, state.latest, state.result?.approved, view.awaitingRecoveryConfirm, view.awaitingSetup, view.awaitingConfirm, view.editingTask, view.screen, view.cancelled, view.selected, view.focus, size.rows, size.cols]);
     useEffect(() => {
       dispatchView({ type: 'autoFollow', order: state.order });
     }, [state.order.length]);
@@ -1855,7 +1872,7 @@ export async function runTui({ config }) {
     // Kick off the run exactly once, but only after the user confirms (or
     // immediately if --yes / ACP_REVIEW_YES skipped the prompt).
     useEffect(() => {
-      if (runStarted || view.awaitingSetup || view.awaitingConfirm || view.cancelled || view.screen === 'taskConfirm') return;
+      if (runStarted || view.awaitingRecoveryConfirm || view.awaitingSetup || view.awaitingConfirm || view.cancelled || view.screen === 'taskConfirm') return;
       runStarted = true;
       ensureEngine().run()
         .then((r) => { runResult = r; })
@@ -1865,7 +1882,7 @@ export async function runTui({ config }) {
           setTick((t) => (t + 1) | 0);
 
         });
-    }, [view.awaitingSetup, view.awaitingConfirm, view.cancelled, view.screen]);
+    }, [view.awaitingRecoveryConfirm, view.awaitingSetup, view.awaitingConfirm, view.cancelled, view.screen]);
 
     // If user cancels in the confirm overlay, treat the run as done so `q` exits.
     useEffect(() => {
@@ -1903,6 +1920,15 @@ export async function runTui({ config }) {
 
       if (input === '?') {
         dispatchView({ type: 'toggleHelp' });
+        return;
+      }
+
+      if (view.awaitingRecoveryConfirm) {
+        if (input === 'y' || input === 'Y') {
+          dispatchView({ type: 'resumeRecovery' });
+        } else if (input === 'n' || input === 'N' || key.return || key.escape || input === 'q') {
+          dispatchView({ type: 'discardRecovery' });
+        }
         return;
       }
 
@@ -2834,6 +2860,46 @@ export async function runTui({ config }) {
           h(Text, { color: 'cyan', bold: true }, formatTuiTaskEditorWaitingTitle()),
           h(Text, { dimColor: true }, 'The TUI is paused while your editor is active.'),
           h(Text, { dimColor: true }, 'Save and close the editor to return here.'),
+        ),
+      );
+    }
+
+    if (view.awaitingRecoveryConfirm) {
+      const summary = formatTuiRecoveryPromptRows(pendingRunRecovery);
+      return h(
+        Box,
+        {
+          flexDirection: 'column',
+          width: size.cols,
+          height: size.rows,
+          overflow: 'hidden',
+        },
+        h(
+          Box,
+          {
+            flexDirection: 'column',
+            borderStyle: 'double',
+            borderColor: 'yellow',
+            paddingX: 2,
+            paddingY: 1,
+            width: size.cols,
+            height: size.rows,
+            overflow: 'hidden',
+          },
+          h(Text, { bold: true, color: 'yellow' }, 'Resume Interrupted Spar Run?'),
+          h(Text, null, ''),
+          ...summary.map((line, i) => h(Text, { key: `recovery-summary-${i}`, wrap: 'wrap' }, line)),
+          h(Text, null, ''),
+          h(
+            Text,
+            null,
+            h(Text, { color: 'green', bold: true }, 'y'),
+            ' resume   ',
+            h(Text, { color: 'red', bold: true }, 'n'),
+            ' / ',
+            h(Text, { color: 'red', bold: true }, 'Enter'),
+            ' start fresh',
+          ),
         ),
       );
     }

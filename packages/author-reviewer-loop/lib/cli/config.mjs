@@ -15,11 +15,13 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
     .name('spar')
     .description('Run split-context AUTHOR and REVIEWER ACP agents over one workspace.')
     .usage('<cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]')
-    .argument('<cwd>', 'workspace directory')
-    .argument('<task...>', 'task text, or a relative/absolute path to a UTF-8 task file')
+    .argument('[cwd]', 'workspace directory')
+    .argument('[task...]', 'task text, or a relative/absolute path to a UTF-8 task file')
     .option('-y, --yes', 'skip confirmation prompt')
     .option('--cli', 'use the plain line-based renderer instead of the default TUI')
     .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
+    .option('--doctor', 'run local Spar environment diagnostics and exit')
+    .option('--danger-ignore-approval', 'danger: ignore reviewer approval and always run all MAX_ROUNDS rounds')
     .option('--quality <quality>', 'quality level: prod|dev')
     .version(readPackageVersion(), '-v, --version', 'output the current version')
     .addHelpText('after', `
@@ -46,10 +48,13 @@ Environment:
   if (argv) program.parse(argv, { from: 'user' });
   else program.parse();
 
-  const cwd = path.resolve(parsedArgs.cwdArg);
-  const { task, taskSource } = resolveTask(parsedArgs.taskParts, cwd);
   const opts = program.opts();
-  const tui = resolveRendererMode(opts);
+  if (!opts.doctor && (!parsedArgs.cwdArg || !parsedArgs.taskParts?.length)) {
+    program.error('missing required arguments: <cwd> <task-or-task-file...>');
+  }
+  const cwd = path.resolve(parsedArgs.cwdArg || process.cwd());
+  const { task, taskSource } = resolveTask(parsedArgs.taskParts || [], cwd);
+  const tui = opts.doctor ? false : resolveRendererMode(opts);
   const quality = resolveQuality(opts);
   const resolvedPreferencesPath = preferencesPath ?? defaultPreferencesFilePath();
   const saved = normalizePreferences(preferences ?? readPreferences({ filePath: resolvedPreferencesPath }));
@@ -78,6 +83,9 @@ Environment:
     cwd,
     task,
     taskSource,
+    doctor: Boolean(opts.doctor),
+    dangerIgnoreApproval: Boolean(opts.dangerIgnoreApproval),
+    version: readPackageVersion(),
     maxRounds: envPositiveInt('MAX_ROUNDS', defaults.maxRounds),
     quality,
     trace: envFlag('ACP_REVIEW_TRACE'),
@@ -108,12 +116,13 @@ Environment:
       modelSource: reviewerResolved.modelSource,
       modelEnvName: 'REVIEWER_MODEL',
       sessionTurns: envStrictPositiveInt('REVIEWER_SESSION_TURNS', defaults.sessionTurns),
-      prompt: ({ round, feedback, authorReply }) => createReviewerPrompt({
+      prompt: ({ round, feedback, authorReply, workspaceChangeSummary }) => createReviewerPrompt({
         cwd,
         task: config.task,
         round,
         feedback,
         authorReply,
+        workspaceChangeSummary,
         quality: config.quality,
       }),
     },
@@ -212,6 +221,12 @@ function authorReplySection(authorReply) {
   return `AUTHOR's reply for this round (their summary of what they changed):\n${text}\n\n`;
 }
 
+function workspaceChangeSection(workspaceChangeSummary) {
+  const text = typeof workspaceChangeSummary === 'string' ? workspaceChangeSummary.trim() : '';
+  if (!text) return '';
+  return `Observed workspace changes after the AUTHOR turn:\n${text}\n\n`;
+}
+
 function createAuthorPrompt({ cwd, task, round, feedback, quality }) {
   const taskLabel = round === 1 ? 'Task' : 'Current task';
   const feedbackText = String(feedback || '').trim() || '<none>';
@@ -279,7 +294,7 @@ function createAuthorPrompt({ cwd, task, round, feedback, quality }) {
   ].filter(Boolean).join('\n');
 }
 
-function createReviewerPrompt({ cwd, task, round, feedback, authorReply, quality }) {
+function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspaceChangeSummary, quality }) {
   const prompt = [
     `You are the REVIEWER. Round: ${round}`,
     '',
@@ -287,10 +302,12 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, quality
     '',
     previousFeedbackSection(feedback).trimEnd(),
     authorReplySection(authorReply).trimEnd(),
+    workspaceChangeSection(workspaceChangeSummary).trimEnd(),
     quality === 'dev'
       ? `Inspect the relevant project state under ${cwd} using your filesystem tools.`
       : `Inspect the whole project under ${cwd} using your filesystem tools.`,
     'Use the AUTHOR reply as a report of claimed work, not as evidence. Double-check claimed changes against the actual project files before judging.',
+    'Treat the observed workspace-change summary as a fact to investigate. If it says no disk changes were detected, verify whether the task could truly be complete without edits before approving.',
     'If this workspace is a git repository, git status/diff can help identify changes; if it is not a git repository, inspect the relevant files directly instead.',
   ];
 

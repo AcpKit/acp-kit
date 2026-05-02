@@ -181,6 +181,7 @@ function normalizeLoopState(value) {
     roundLimit: normalizePositiveInt(value.roundLimit, null),
     approvalContinuations: normalizeNonNegativeInt(value.approvalContinuations, 0),
     feedback: typeof value.feedback === 'string' ? value.feedback : '',
+    workspaceChangeSummary: typeof value.workspaceChangeSummary === 'string' ? value.workspaceChangeSummary : '',
     pending,
     error: typeof value.error === 'string' ? value.error : undefined,
   };
@@ -221,6 +222,7 @@ function normalizePendingAction(value) {
   if (value.type === 'reviewer-turn') {
     if (typeof value.authorReply !== 'string') return null;
     pending.authorReply = value.authorReply;
+    if (typeof value.workspaceChangeSummary === 'string') pending.workspaceChangeSummary = value.workspaceChangeSummary;
   }
 
   if (value.type === 'approval-decision') {

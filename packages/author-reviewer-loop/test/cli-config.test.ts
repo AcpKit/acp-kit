@@ -73,6 +73,8 @@ describe('author-reviewer-loop CLI config', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Usage: spar <cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]');
     expect(result.stdout).toContain('-v, --version');
+    expect(result.stdout).toContain('--doctor');
+    expect(result.stdout).toContain('--danger-ignore-approval');
     expect(result.stderr).toBe('');
   });
 
@@ -84,6 +86,17 @@ describe('author-reviewer-loop CLI config', () => {
 
     process.env.ACP_REVIEW_CLI = '1';
     expect(parseConfig([cwd, 'Build the thing', '--yes']).tui).toBe(false);
+  });
+
+  it('lets doctor run without task text and uses CLI defaults for diagnostics', () => {
+    const cwd = tempDir();
+    const config = parseConfig([cwd, '--doctor']);
+
+    expect(config.doctor).toBe(true);
+    expect(config.tui).toBe(false);
+    expect(config.task).toBe('');
+    expect(config.authorSettings.agentId).toBe('copilot');
+    expect(config.reviewerSettings.agentId).toBe('codex');
   });
 
   it('gives explicit renderer flags precedence over compatibility environment flags', () => {
@@ -219,6 +232,25 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.reviewerSettings.model).toBe('gpt-5.5');
   });
 
+  it('parses danger-ignore-approval as invocation-only state', () => {
+    const config = parseConfig([tempDir(), 'Build the thing', '--yes', '--cli', '--danger-ignore-approval']);
+    const savePreferences = vi.fn();
+
+    expect(config.dangerIgnoreApproval).toBe(true);
+
+    commitSetupSelections(config, {
+      selections: {
+        authorAgentId: 'copilot',
+        authorModel: 'gpt-5.4',
+        reviewerAgentId: 'codex',
+        reviewerModel: 'gpt-5.5',
+        save: true,
+      },
+    }, { savePreferences });
+
+    expect(savePreferences.mock.calls[0][0]).not.toHaveProperty('dangerIgnoreApproval');
+  });
+
   it('defaults to 20 rounds, 20-turn role sessions, and wrap enabled in TUI mode', () => {
     const config = parseConfig([tempDir(), 'Build the thing', '--yes']);
 
@@ -312,6 +344,19 @@ describe('author-reviewer-loop CLI config', () => {
     expect(formatted).toContain('AUTHOR_AGENT=missing-agent is not supported');
     expect(formatted).not.toContain('at envChoice');
     expect(formatted.startsWith('Error: ')).toBe(true);
+  });
+
+  it('expands aggregate run and cleanup errors for actionable CLI output', () => {
+    const error = new AggregateError([
+      new Error('RequestError: Internal error'),
+      new Error('session.close failed'),
+    ], 'Author-reviewer loop failed and cleanup also failed.');
+
+    const formatted = formatStartupError(error);
+
+    expect(formatted).toContain('Author-reviewer loop failed and cleanup also failed.');
+    expect(formatted).toContain('Cause 1: Error: RequestError: Internal error');
+    expect(formatted).toContain('Cause 2: Error: session.close failed');
   });
 
   it('resolves relative and absolute task files once at startup', () => {

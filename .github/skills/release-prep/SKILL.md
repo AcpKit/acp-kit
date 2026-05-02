@@ -49,12 +49,13 @@ git ls-remote --tags origin "v$version"
 
 ## 3. Update Release Notes And Docs
 
-Update root `CHANGELOG.md`:
+Update root `CHANGELOG.md` only for `@acp-kit/core`, repository-wide release infrastructure, docs-site, or cross-package changes:
 
 - Keep `## [Unreleased]` at the top.
 - Add `## [$version] - YYYY-MM-DD` directly below it.
 - Move relevant unreleased bullets into `Added`, `Changed`, `Fixed`, or `Removed` sections.
-- Mention package names when useful, especially `@acp-kit/core` vs `@acp-kit/author-reviewer-loop`.
+- Mention package names when useful, especially `@acp-kit/core` vs repository tooling.
+- Do **not** duplicate Spar-only changes in root `CHANGELOG.md`. Spar CLI/TUI/runtime/docs/package metadata changes belong in `packages/author-reviewer-loop/CHANGELOG.md` only.
 
 Update `packages/author-reviewer-loop/CHANGELOG.md` when that package behavior, CLI, TUI, docs, or package metadata changed.
 

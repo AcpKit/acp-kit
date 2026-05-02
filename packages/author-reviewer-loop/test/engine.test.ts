@@ -997,6 +997,33 @@ describe('author-reviewer-loop engine', () => {
     expect(authorTurns[1]?.[0].prompt).toContain('force another round');
   });
 
+  it('ignores reviewer approval in danger mode and runs all configured rounds', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = {
+      ...config(3),
+      dangerIgnoreApproval: true,
+      onApproved: vi.fn().mockResolvedValue({ continue: false }),
+    };
+    cfg.authorSettings.prompt = ({ round, feedback }: { round: number; feedback: string }) => `author ${round}\nfeedback=${feedback || '<none>'}`;
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? `APPROVED\nround ${round} good` : 'implemented',
+    );
+
+    const result = await createLoopEngine({ config: cfg }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 3, maxRounds: 3 });
+    expect(cfg.onApproved).not.toHaveBeenCalled();
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(3);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(3);
+    expect(mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt)
+      .toContain('APPROVED\nround 1 good');
+  });
+
   it('refreshes sessions on an approval continuation when session turn limits are exhausted', async () => {
     const authorStates = [
       { role: 'AUTHOR', session: { id: 'author-run-trace-1' } },
@@ -1447,6 +1474,28 @@ describe('author-reviewer-loop engine', () => {
     expect(runRecoveryStore.clear).toHaveBeenCalledTimes(1);
   });
 
+  it('clears startup-failure recovery noise when no turn made recoverable progress', async () => {
+    const startupError = new Error('author agent failed to start');
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session', sessionId: 'reviewer-session' } };
+    const store = {
+      load: vi.fn().mockReturnValue(null),
+      write: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') throw startupError;
+      return reviewerState;
+    });
+
+    await expect(createLoopEngine({ config: { ...config(1), runRecovery: { store } } }).run())
+      .rejects.toThrow('author agent failed to start');
+
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+    expect(store.clear).toHaveBeenCalledTimes(1);
+  });
+
   it('resumes from a saved approval decision without rerunning agent turns', async () => {
     const authorState = {
       role: 'AUTHOR',
@@ -1637,6 +1686,101 @@ describe('author-reviewer-loop engine', () => {
     expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(0);
     expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(1);
     expect(store.load()).toBeNull();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('recovers from one ACP internal error by reopening the role session and retrying the turn once', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session', sessionId: 'author-session' } };
+    const reviewerStates = [
+      { role: 'REVIEWER', session: { id: 'reviewer-session-1', sessionId: 'reviewer-session-1' } },
+      { role: 'REVIEWER', session: { id: 'reviewer-session-2', sessionId: 'reviewer-session-2' } },
+    ];
+    let reviewerIndex = 0;
+    const acpError = new Error('Internal error');
+    acpError.name = 'RequestError';
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') return authorState;
+      return reviewerStates[reviewerIndex++];
+    });
+    mocks.runTurn.mockImplementation(async ({ role, state }: { role: 'AUTHOR' | 'REVIEWER'; state: { session: { sessionId: string } } }) => {
+      if (role === 'AUTHOR') return 'implemented';
+      if (state.session.sessionId === 'reviewer-session-1') throw acpError;
+      return 'APPROVED\nRecovered after one ACP retry.';
+    });
+
+    const result = await createLoopEngine({ config: config(1) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(mocks.openRole).toHaveBeenCalledTimes(3);
+    expect(mocks.closeRole).toHaveBeenCalledWith(reviewerStates[0]);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER').map(([arg]) => arg.state))
+      .toEqual(reviewerStates);
+  });
+
+  it('keeps a real recovery checkpoint when an ACP turn failure is followed by cleanup failure', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'spar-engine-acp-failure-'));
+    const cfg = config(2);
+    const store = createRunRecoveryStore({ enabled: true, home, config: cfg });
+    const authorState = {
+      role: 'AUTHOR',
+      session: { id: 'author-session', sessionId: 'author-session' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    const reviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session', sessionId: 'reviewer-session' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    const retryReviewerState = {
+      role: 'REVIEWER',
+      session: { id: 'reviewer-session-retry', sessionId: 'reviewer-session-retry' },
+      recovery: { resumed: false, turnsOnActiveSession: 0 },
+    };
+    let reviewerIndex = 0;
+    const acpError = new Error('Internal error');
+    acpError.name = 'RequestError';
+    const cleanupError = new Error('session.close failed after ACP internal error');
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') return authorState;
+      return reviewerIndex++ === 0 ? reviewerState : retryReviewerState;
+    });
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') return 'Implemented the requested change before transport failed.';
+      throw acpError;
+    });
+    mocks.closeRole.mockImplementation(async (state: { role: string }) => {
+      if (state.role === 'REVIEWER') throw cleanupError;
+    });
+
+    const thrown = await createLoopEngine({ config: { ...cfg, runRecovery: { enabled: true, home, store } } })
+      .run()
+      .catch((error) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect(thrown.errors.map((error: Error) => error.message)).toEqual(expect.arrayContaining([
+      'Internal error',
+      'session.close failed after ACP internal error',
+    ]));
+
+    const writtenRecovery = store.load();
+    expect(writtenRecovery).toMatchObject({
+      loop: {
+        error: expect.stringContaining('Internal error'),
+        pending: {
+          type: 'reviewer-turn',
+          round: 1,
+          started: true,
+          authorReply: 'Implemented the requested change before transport failed.',
+        },
+      },
+      roles: {
+        AUTHOR: { sessionId: 'author-session', turnsOnActiveSession: 1 },
+        REVIEWER: { sessionId: 'reviewer-session-retry', turnsOnActiveSession: 1 },
+      },
+    });
+
     fs.rmSync(home, { recursive: true, force: true });
   });
 

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-02
+
+### Added
+
+- Added `--doctor` for local preflight diagnostics without starting AUTHOR or REVIEWER agents.
+- Added `--danger-ignore-approval` for intentionally running every configured `MAX_ROUNDS` round even if REVIEWER replies `APPROVED`. The flag is invocation-only, is not saved to preferences, refuses non-interactive runs, and requires explicit double confirmation even when `--yes` is set.
+- Failure diagnostics now include run trace path, recovery checkpoint path, real-workspace policy, recent tool calls, and the latest workspace-change summary.
+
+### Changed
+
+- Spar now asks before resuming interrupted run recovery and defaults to starting fresh when the user does not opt in.
+- The package README is shorter and focused on meaning, usage, key behavior, and pointers to deeper docs.
+
+### Fixed
+
+- Startup recovery checkpoints are no longer written before any recoverable turn progress, and startup failures without progress clear noisy recovery state instead of offering unusable recovery later.
+- ACP internal turn failures now trigger one automatic session recovery retry before surfacing the error. If the retry or cleanup still fails, Spar preserves the interrupted-run checkpoint, keeps non-interactive recovery confirmation from deleting it, and prints each aggregate failure cause instead of hiding the original ACP error behind a cleanup wrapper.
+- Reviewer prompts now receive an explicit workspace-change summary after each AUTHOR turn. Git workspaces combine status/diff paths, index blob changes, and dirty-file content signatures so changed tracked files are not misreported as unchanged when filenames stay the same or when AUTHOR commits and leaves a clean working tree; non-git workspaces use filesystem snapshots.
+- Real-workspace policy handling is now centralized through adapter hooks for launch profile adaptation, per-session setup, and diagnostics. Codex and Claude Code coverage now validates launch/session policy and reviewer-visible disk changes against real temporary workspaces.
+
 ## [0.7.1] - 2026-05-02
 
 ### Changed

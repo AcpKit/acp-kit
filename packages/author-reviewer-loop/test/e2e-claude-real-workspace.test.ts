@@ -68,6 +68,10 @@ describe('Spar Claude Code real-workspace E2E', () => {
         expect.objectContaining({ event: 'author-wrote-marker', mode: 'bypassPermissions' }),
         expect.objectContaining({ event: 'reviewer-read-marker', content: 'author wrote to real disk' }),
       ]));
+      const firstSetMode = entries.findIndex((entry) => entry.event === 'set-mode' && entry.modeId === 'bypassPermissions');
+      const firstAuthorWrite = entries.findIndex((entry) => entry.event === 'author-wrote-marker');
+      expect(firstSetMode).toBeGreaterThanOrEqual(0);
+      expect(firstAuthorWrite).toBeGreaterThan(firstSetMode);
       expect(result.stdout).toContain('APPROVED');
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

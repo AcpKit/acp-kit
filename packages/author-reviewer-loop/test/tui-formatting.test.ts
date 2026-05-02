@@ -19,6 +19,7 @@ import {
   formatTuiTaskEditorWaitingTitle,
   formatTuiUsageLabel,
   formatTuiForceContinueDecision,
+  formatTuiRecoveryPromptRows,
   formatTuiPrimaryFooterKeys,
   formatTuiHelpKeybindings,
   formatTuiSetupFooterKeys,
@@ -83,12 +84,27 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     const launching = { phase: Phase.Launching };
 
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow' } })).toBe(true);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', awaitingRecoveryConfirm: true } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', awaitingSetup: true } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', awaitingConfirm: true } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', editingTask: true } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', cancelled: true } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'trace' } })).toBe(false);
     expect(shouldPatchTuiChrome({ state: { phase: Phase.Done }, view: { screen: 'flow' } })).toBe(false);
+  });
+
+  it('formats the recovery confirmation overlay with an explicit fresh-start default', () => {
+    const rows = formatTuiRecoveryPromptRows({
+      updatedAt: Date.UTC(2026, 4, 2, 6, 7, 8),
+      loop: { pending: { type: 'reviewer-turn', round: 2 } },
+    });
+
+    expect(rows).toEqual([
+      'Found an interrupted Spar run checkpoint.',
+      'Pending step: reviewer-turn round 2.',
+      'Updated at: 2026-05-02T06:07:08.000Z.',
+      'Default is no: start fresh and discard this checkpoint.',
+    ]);
   });
 
   it('summarizes run status in the dashboard header across lifecycle states', () => {
