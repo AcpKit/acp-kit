@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createSessionTurnManager } from '@acp-kit/core';
 import { PaneStatus, Phase, initialState, reduce } from './engine/state.mjs';
 import { closeRole, openRole } from './runtime/role.mjs';
 import { createInitialRunRecoveryState, createRunRecoveryStore } from './runtime/run-recovery.mjs';
@@ -699,79 +700,33 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
 }
 
 function createRoleSessionManager({ role, settings, getInitialRole, openRole: openRoleFn, closeRole: closeRoleFn, cwd, trace, captureTrace, renderer, maxTurns, recovery, retiredRoles }) {
-  const turnLimit = normalizeSessionTurnLimit(maxTurns);
-  const startedRoles = new Set();
-  let active = null;
-  let initialConsumed = false;
-  let turnsOnActiveSession = 0;
-
-  async function openFreshRole() {
-    const state = await openRoleFn({ role, settings, cwd, trace, captureTrace, renderer });
-    startedRoles.add(state);
-    return state;
-  }
-
-  async function ensureActiveRole() {
-    if (active) return active;
-    active = initialConsumed ? await openFreshRole() : await getInitialRole();
-    initialConsumed = true;
-    startedRoles.add(active);
-    turnsOnActiveSession = Math.max(0, Number(active?.recovery?.turnsOnActiveSession) || Number(recovery?.turnsOnActiveSession) || 0);
-    return active;
-  }
-
-  async function refreshRole() {
-    const previous = active;
-    active = null;
-    renderer.onRoleStatus?.({ role, message: 'refreshing session after ' + turnLimit + ' turn(s)...' });
-    try {
-      await closeRoleFn(previous);
-      retiredRoles.add(previous);
-    } catch {
-      // Final cleanup will retry closing this state and report persistent failures.
-    }
-    active = await openFreshRole();
-    turnsOnActiveSession = 0;
-  }
-
-  async function recoverRoleForRetry() {
-    const previous = active;
-    active = null;
-    renderer.onRoleStatus?.({ role, message: 'recovering session after ACP internal error...' });
-    try {
-      await closeRoleFn(previous);
-      retiredRoles.add(previous);
-    } catch {
-      // Final cleanup will retry closing this state and report persistent failures.
-    }
-    active = await openFreshRole();
-    turnsOnActiveSession = 1;
-    return active;
-  }
+  const manager = createSessionTurnManager({
+    maxTurns,
+    recovery,
+    getInitial: getInitialRole,
+    open: () => openRoleFn({ role, settings, cwd, trace, captureTrace, renderer }),
+    close: async (state) => {
+      await closeRoleFn(state);
+      if (state) retiredRoles.add(state);
+    },
+    getSessionId: (state) => state?.session?.sessionId,
+    onRefresh: ({ turnLimit }) => {
+      renderer.onRoleStatus?.({ role, message: 'refreshing session after ' + turnLimit + ' turn(s)...' });
+    },
+    onRecover: () => {
+      renderer.onRoleStatus?.({ role, message: 'recovering session after ACP internal error...' });
+    },
+    onCloseError: (_error, state) => {
+      if (state) retiredRoles.add(state);
+    },
+  });
 
   return {
-    async getForTurn() {
-      await ensureActiveRole();
-      if (turnsOnActiveSession >= turnLimit) await refreshRole();
-      turnsOnActiveSession += 1;
-      return active;
-    },
-    async recoverForRetry() {
-      return recoverRoleForRetry();
-    },
-    getActive() {
-      return active;
-    },
-    getStartedRoles() {
-      return Array.from(startedRoles);
-    },
-    getRecoverySnapshot() {
-      if (!active?.session?.sessionId) return null;
-      return {
-        sessionId: active.session.sessionId,
-        turnsOnActiveSession,
-      };
-    },
+    getForTurn: () => manager.getForTurn(),
+    recoverForRetry: () => manager.recoverForRetry(),
+    getActive: () => manager.getActive(),
+    getStartedRoles: () => manager.getStarted(),
+    getRecoverySnapshot: () => manager.getRecoverySnapshot(),
   };
 }
 
@@ -956,11 +911,6 @@ function normalizePendingRecovery(value) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
-}
-
-function normalizeSessionTurnLimit(value) {
-  if (Number.isInteger(value) && value >= 1) return value;
-  return 20;
 }
 
 async function normalizeStartupError({ startup, author, error }) {
