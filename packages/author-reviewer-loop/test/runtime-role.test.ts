@@ -29,17 +29,23 @@ const mocks = vi.hoisted(() => ({
   inspectorListeners: [] as Array<(entry: unknown) => void>,
 }));
 
-vi.mock('@acp-kit/core', () => ({
-  PermissionDecision: { AllowAlways: 'allow-always' },
-  createAcpRuntime: mocks.createAcpRuntime,
-  createRuntimeInspector: vi.fn(() => ({
-    onEntry: vi.fn((listener: (entry: unknown) => void) => {
-      mocks.inspectorListeners.push(listener);
-      return vi.fn();
-    }),
-    toJSONL: vi.fn(() => ''),
-  })),
-}));
+vi.mock('@acp-kit/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@acp-kit/core')>();
+  const sessionRecovery = await import('../../core/src/session-recovery.ts');
+  return {
+    ...actual,
+    PermissionDecision: { AllowAlways: 'allow-always' },
+    createAcpRuntime: mocks.createAcpRuntime,
+    createRuntimeInspector: vi.fn(() => ({
+      onEntry: vi.fn((listener: (entry: unknown) => void) => {
+        mocks.inspectorListeners.push(listener);
+        return vi.fn();
+      }),
+      toJSONL: vi.fn(() => ''),
+    })),
+    openOrCreateRuntimeSession: sessionRecovery.openOrCreateRuntimeSession,
+  };
+});
 
 vi.mock('@acp-kit/core/node', () => ({
   createLocalFileSystemHost: vi.fn(() => ({})),

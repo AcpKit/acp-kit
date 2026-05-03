@@ -3,6 +3,7 @@ import {
   PermissionDecision,
   createAcpRuntime,
   createRuntimeInspector,
+  openOrCreateRuntimeSession,
 } from '@acp-kit/core';
 import { createLocalFileSystemHost, createLocalTerminalHost, nodeChildProcessTransport } from '@acp-kit/core/node';
 import { formatEnvAssignment } from '../config/shell.mjs';
@@ -139,76 +140,7 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
 async function openRuntimeSession({ runtime, cwd, recovery, emitRoleStatus }) {
   const resolvedCwd = resolve(cwd);
   const sessionId = typeof recovery?.sessionId === 'string' ? recovery.sessionId.trim() : '';
-  if (!sessionId) {
-    return {
-      session: await runtime.newSession({ cwd: resolvedCwd }),
-      resumed: false,
-    };
-  }
-
-  emitRoleStatus(`resuming saved session ${sessionId}...`);
-  try {
-    return {
-      session: await runtime.loadSession({ sessionId, cwd: resolvedCwd }),
-      resumed: true,
-    };
-  } catch (error) {
-    if (!isUnavailableSavedSessionError(error)) throw error;
-    emitRoleStatus('saved session unavailable, starting fresh...');
-    return {
-      session: await runtime.newSession({ cwd: resolvedCwd }),
-      resumed: false,
-    };
-  }
-}
-
-function isUnavailableSavedSessionError(error, depth = 0, seen = new WeakSet()) {
-  if (depth > 4) return false;
-  if (typeof error === 'string') return hasUnavailableSavedSessionMessage(error);
-  if (!error || (typeof error !== 'object' && !(error instanceof Error))) return false;
-  if (typeof error === 'object') {
-    if (seen.has(error)) return false;
-    seen.add(error);
-  }
-
-  const status = readNumericField(error, 'status', 'statusCode');
-  if (status === 404) return true;
-
-  const code = readStringField(error, 'code', 'errorCode');
-  if (code && /^(?:ENOENT|404|NOT_?FOUND|SESSION_NOT_FOUND)$/i.test(code)) return true;
-
-  const message = error instanceof Error ? error.message : readStringField(error, 'message', 'error', 'reason', 'detail', 'details', 'text');
-  if (hasUnavailableSavedSessionMessage(message)) return true;
-
-  const cause = error instanceof Error
-    ? error.cause
-    : error.cause ?? error.error ?? error.reason ?? error.detail ?? error.details;
-  return isUnavailableSavedSessionError(cause, depth + 1, seen);
-}
-
-function hasUnavailableSavedSessionMessage(message) {
-  if (typeof message !== 'string') return false;
-  return /\b(?:session\s+not\s+found|unknown\s+session|no\s+such\s+session|cannot\s+find\s+session|saved\s+session\s+unavailable)\b/i.test(message);
-}
-
-function readNumericField(value, ...keys) {
-  for (const key of keys) {
-    if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)) {
-      const number = Number(value[key]);
-      if (Number.isFinite(number)) return number;
-    }
-  }
-  return null;
-}
-
-function readStringField(value, ...keys) {
-  for (const key of keys) {
-    if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)) {
-      const field = value[key];
-      if (typeof field === 'string' && field.trim()) return field;
-    }
-  }
-  return '';
+  return openOrCreateRuntimeSession({ runtime, cwd: resolvedCwd, sessionId, onStatus: emitRoleStatus });
 }
 
 function readUsage(value) {
