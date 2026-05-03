@@ -147,6 +147,92 @@ describe('author-reviewer-loop engine', () => {
     expect(mocks.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it('repairs approval-like reviewer replies without starting another author turn', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, prompt }: { role: 'AUTHOR' | 'REVIEWER'; prompt: string }) => {
+      if (role === 'AUTHOR') return 'implemented durable fix';
+      if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
+        expect(prompt).toContain('Output exactly one line');
+        expect(prompt).toContain('SPAR_VERDICT: APPROVED');
+        expect(prompt).toContain('SPAR_VERDICT: REJECTED');
+        return 'SPAR_VERDICT: APPROVED';
+      }
+      return 'I reviewed the workspace and everything looks good. APPROVED.';
+    });
+
+    const result = await createLoopEngine({ config: config(3) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1, feedback: 'SPAR_VERDICT: APPROVED' });
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(1);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(2);
+  });
+
+  it('repairs machine verdict replies when the verdict line is not last', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, prompt }: { role: 'AUTHOR' | 'REVIEWER'; prompt: string }) => {
+      if (role === 'AUTHOR') return 'implemented durable fix';
+      if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
+        expect(prompt).toContain('machine verdict line must be last');
+        return 'SPAR_VERDICT: APPROVED';
+      }
+      return 'SPAR_VERDICT: APPROVED\nEverything looks good.';
+    });
+
+    const result = await createLoopEngine({ config: config(3) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1, feedback: 'SPAR_VERDICT: APPROVED' });
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(1);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(2);
+  });
+
+  it('repairs contradictory approved machine verdict replies instead of accepting them', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, prompt }: { role: 'AUTHOR' | 'REVIEWER'; prompt: string }) => {
+      if (role === 'AUTHOR') return 'implemented durable fix';
+      if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
+        expect(prompt).toContain('conflicting text before approved machine verdict');
+        return 'SPAR_VERDICT: REJECTED';
+      }
+      return '1. Remaining issue: Linux startup is still broken.\nSPAR_VERDICT: APPROVED';
+    });
+
+    const result = await createLoopEngine({ config: config(1) }).run();
+
+    expect(result).toMatchObject({ approved: false, rounds: 1 });
+    expect(result.feedback).toContain('Remaining issue: Linux startup is still broken.');
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(1);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(2);
+  });
+
+  it('stops with a verdict error after the internal repair retry budget is exhausted', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'Looks good, approved.' : 'implemented durable fix',
+    );
+
+    await expect(createLoopEngine({ config: config(3) }).run())
+      .rejects.toThrow('Reviewer did not provide a valid SPAR_VERDICT after 3 repair attempt');
+
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(1);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(4);
+  });
+
   it('rejects same-line conditional APPROVED verdicts that still describe unresolved risk', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
@@ -1226,8 +1312,11 @@ describe('author-reviewer-loop engine', () => {
     mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
       role === 'AUTHOR' ? authorState : reviewerState,
     );
-    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) => {
+    mocks.runTurn.mockImplementation(async ({ role, round, prompt }: { role: 'AUTHOR' | 'REVIEWER'; round: number; prompt: string }) => {
       if (role === 'AUTHOR') return round === 1 ? 'draft' : 'reworked draft';
+      if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
+        return 'SPAR_VERDICT: REJECTED';
+      }
       return round === 1 ? ' \n\t ' : 'APPROVED';
     });
 

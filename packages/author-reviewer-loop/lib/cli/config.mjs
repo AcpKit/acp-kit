@@ -320,8 +320,8 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspa
       '2. The changes are coherent with the surrounding code.',
       '3. Relevant validation was run when practical.',
       '',
-      'Reply APPROVED on its own line if the task is completed.',
-      'Otherwise reply with a terse numbered list of concrete fixes needed.',
+      'End your reply with exactly one machine-readable verdict line: SPAR_VERDICT: APPROVED or SPAR_VERDICT: REJECTED.',
+      'Use SPAR_VERDICT: APPROVED only if the task is completed. Use SPAR_VERDICT: REJECTED when concrete fixes are still needed.',
     );
     return prompt.filter(Boolean).join('\n');
   }
@@ -332,7 +332,8 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspa
     'Expect coverage that reflects real user experience: relevant unit, integration, scenario/use-case, and realistic end-to-end checks where the task touches those layers.',
     'Reject vanity tests, over-idealized mocks, gaps in recovery behavior, and approval based only on happy paths or local file diffs.',
     'Do not assume nothing changed just because earlier rounds looked different.',
-    'Reply APPROVED on its own line only if the project now fully solves the task, the tests are genuinely convincing, and no obvious bugs or omissions remain; otherwise reply with a terse numbered list of issues, each with concrete fix guidance when useful.',
+    'End your reply with exactly one machine-readable verdict line: SPAR_VERDICT: APPROVED or SPAR_VERDICT: REJECTED.',
+    'Use SPAR_VERDICT: APPROVED only if the project now fully solves the task, the tests are genuinely convincing, and no obvious bugs or omissions remain; otherwise use SPAR_VERDICT: REJECTED and include a terse numbered list of issues with concrete fix guidance when useful.',
     'Prefer actionable suggestions over questions; mention exact files, flows, or failure modes that still need work.',
   );
   return prompt.filter(Boolean).join('\n');

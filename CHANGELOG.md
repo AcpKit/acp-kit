@@ -8,6 +8,11 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-03
+
+### Changed
+- Repository release version advanced to `0.8.1` for the matching `@acp-kit/spar` patch release. Core package behavior is unchanged in this release; Spar-specific notes are documented in `packages/author-reviewer-loop/CHANGELOG.md`.
+
 ## [0.8.0] - 2026-05-02
 
 ### Changed

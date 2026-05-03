@@ -499,8 +499,9 @@ describe('author-reviewer-loop CLI config', () => {
     expect(prompt).toContain('Review whether the task is completed.');
     expect(prompt).toContain('The requested behavior is implemented.');
     expect(prompt).toContain('Relevant validation was run when practical.');
-    expect(prompt).toContain('Reply APPROVED on its own line if the task is completed.');
-    expect(prompt).toContain('Otherwise reply with a terse numbered list of concrete fixes needed.');
+    expect(prompt).toContain('SPAR_VERDICT: APPROVED');
+    expect(prompt).toContain('SPAR_VERDICT: REJECTED');
+    expect(prompt).toContain('Use SPAR_VERDICT: REJECTED when concrete fixes are still needed.');
   });
 
   it('commits TUI selections to the configured preferences path while preserving env-locked sources', () => {

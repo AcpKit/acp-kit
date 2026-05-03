@@ -285,6 +285,165 @@ describe('runtime role adapter', () => {
     await state.close();
   });
 
+  it('falls back to a fresh session when the saved session load fails with a not-found status', async () => {
+    const onRoleStatus = vi.fn();
+    const error = new Error('resume failed');
+    Object.assign(error, { status: 404 });
+    mocks.runtime.loadSession.mockRejectedValueOnce(error);
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'gone-session', turnsOnActiveSession: 2 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.runtime.loadSession).toHaveBeenCalledWith({ sessionId: 'gone-session', cwd: path.resolve(process.cwd()) });
+    expect(mocks.runtime.newSession).toHaveBeenCalledWith({ cwd: path.resolve(process.cwd()) });
+    expect(onRoleStatus).toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+    expect(state.recovery).toMatchObject({ resumed: false, requestedSessionId: 'gone-session', turnsOnActiveSession: 0 });
+
+    await state.close();
+  });
+
+  it('does not hide non-stale loadSession failures behind a fresh session fallback', async () => {
+    const onRoleStatus = vi.fn();
+    const error = new Error('ACP session/load timed out during high latency startup');
+    mocks.runtime.loadSession.mockRejectedValueOnce(error);
+
+    await expect(openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'saved-session', turnsOnActiveSession: 9 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    })).rejects.toThrow('ACP session/load timed out during high latency startup');
+
+    expect(mocks.runtime.loadSession).toHaveBeenCalledWith({ sessionId: 'saved-session', cwd: path.resolve(process.cwd()) });
+    expect(mocks.runtime.newSession).not.toHaveBeenCalled();
+    expect(onRoleStatus).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+  });
+
+  it('does not fall back on service-side 5xx resume failures', async () => {
+    const onRoleStatus = vi.fn();
+    const error = new Error('ACP backend unavailable');
+    Object.assign(error, { status: 503 });
+    mocks.runtime.loadSession.mockRejectedValueOnce(error);
+
+    await expect(openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'saved-session', turnsOnActiveSession: 4 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    })).rejects.toThrow('ACP backend unavailable');
+
+    expect(mocks.runtime.newSession).not.toHaveBeenCalled();
+    expect(onRoleStatus).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+  });
+
+  it('does not fall back on transport-style connection failures during resume', async () => {
+    const onRoleStatus = vi.fn();
+    const error = new Error('connect ECONNREFUSED 127.0.0.1:4317');
+    Object.assign(error, { code: 'ECONNREFUSED' });
+    mocks.runtime.loadSession.mockRejectedValueOnce(error);
+
+    await expect(openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'saved-session', turnsOnActiveSession: 4 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    })).rejects.toThrow('connect ECONNREFUSED 127.0.0.1:4317');
+
+    expect(mocks.runtime.newSession).not.toHaveBeenCalled();
+    expect(onRoleStatus).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+  });
+
+  it('falls back when a nested cause marks the saved session as missing', async () => {
+    const onRoleStatus = vi.fn();
+    const nested = new Error('wrapped resume failure');
+    nested.cause = {
+      reason: {
+        detail: new Error('unknown session'),
+      },
+    };
+    mocks.runtime.loadSession.mockRejectedValueOnce(nested);
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'nested-missing-session', turnsOnActiveSession: 6 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.runtime.newSession).toHaveBeenCalledWith({ cwd: path.resolve(process.cwd()) });
+    expect(onRoleStatus).toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+    expect(state.recovery).toMatchObject({ resumed: false, requestedSessionId: 'nested-missing-session', turnsOnActiveSession: 0 });
+
+    await state.close();
+  });
+
+  it('does not misclassify deep nested non-stale causes as missing sessions', async () => {
+    const onRoleStatus = vi.fn();
+    const nested = new Error('wrapped resume failure');
+    nested.cause = {
+      reason: {
+        detail: new Error('transport timeout after session/load request'),
+      },
+    };
+    mocks.runtime.loadSession.mockRejectedValueOnce(nested);
+
+    await expect(openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      recovery: { sessionId: 'nested-live-session', turnsOnActiveSession: 6 },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    })).rejects.toThrow('wrapped resume failure');
+
+    expect(mocks.runtime.newSession).not.toHaveBeenCalled();
+    expect(onRoleStatus).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'saved session unavailable, starting fresh...' }));
+  });
+
   it('closes a created session before force-killing remaining terminals when model setup fails', async () => {
     const child = { killed: false, kill: vi.fn() };
     mocks.terminalHost.terminals.set('child', child);

@@ -120,8 +120,11 @@ describe('author-reviewer-loop simulated E2E', () => {
     mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
       role === 'AUTHOR' ? authorState : reviewerState,
     );
-    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) => {
+    mocks.runTurn.mockImplementation(async ({ role, round, prompt }: { role: 'AUTHOR' | 'REVIEWER'; round: number; prompt: string }) => {
       if (role === 'AUTHOR') return `implementation ${round}`;
+      if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
+        return 'SPAR_VERDICT: REJECTED';
+      }
       return round === 1 ? '  \n\t ' : 'APPROVED\nRecovery verified after the retry.';
     });
 

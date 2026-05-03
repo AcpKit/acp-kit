@@ -14,15 +14,17 @@ export { PaneStatus, Phase };
 const EMPTY_REVIEWER_FEEDBACK = [
   'Reviewer returned an empty response.',
   '',
-  'Do not assume approval. Re-run verification, summarize the current state clearly, and reply with APPROVED on the first non-empty line only when the workspace is truly ready.',
+  'Do not assume approval. Re-run verification, summarize the current state clearly, and end with exactly one final verdict line: SPAR_VERDICT: APPROVED or SPAR_VERDICT: REJECTED.',
 ].join('\n');
 
 const AMBIGUOUS_APPROVAL_FEEDBACK = [
   'Reviewer response was treated as NOT APPROVED because it mixed APPROVED with conflicting issue text.',
   '',
-  'Put APPROVED on the first non-empty line and keep follow-up notes free of rejection language or issue lists.',
+  'Keep SPAR_VERDICT: APPROVED consistent with the rest of the review. If any required fixes remain, use SPAR_VERDICT: REJECTED instead.',
 ].join('\n');
 
+const DEFAULT_VERDICT_REPAIR_MAX_RETRIES = 3;
+const MACHINE_VERDICT_LINE = /^SPAR_VERDICT\s*:\s*(APPROVED|REJECTED)\s*$/i;
 const ANSI_ESCAPE_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
 const APPROVAL_NEGATIVE_SIGNAL = /\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|remaining|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|cannot|can't|won't|does(?:\s+not|n't)\s+work|timed?\s*out|timeout|error(?:s)?|crash(?:ed|es|ing)?|hang(?:s|ing)?|stuck|loop(?:s|ing)?)\b/;
 const APPROVAL_STATUS_SUBJECT = /^(?:the\s+)?(?:verification|validation|review|checks?|tests?|test suite|build|startup|restart(?: recovery)?|recovery|resume|interruption|windows|linux|macos|path handling|persistence|state|flow|loop|output|session|tooling?|high latency|latency)\b/;
@@ -94,22 +96,74 @@ function interpretReviewerReply(text) {
     .filter(Boolean);
 
   if (meaningfulLines.length === 0) {
-    return { approved: false, feedback: EMPTY_REVIEWER_FEEDBACK };
+    return { status: 'invalid', approved: false, feedback: EMPTY_REVIEWER_FEEDBACK, reason: 'empty response' };
+  }
+
+  const machineVerdicts = meaningfulLines
+    .map((line, index) => {
+      const verdict = line.match(MACHINE_VERDICT_LINE)?.[1]?.toUpperCase();
+      return verdict ? { verdict, index } : null;
+    })
+    .filter(Boolean);
+  if (machineVerdicts.length === 1) {
+    const [{ verdict, index }] = machineVerdicts;
+    if (index !== meaningfulLines.length - 1) {
+      return { status: 'invalid', approved: false, feedback, reason: 'machine verdict line must be last' };
+    }
+
+    const leadingLines = meaningfulLines.slice(0, index);
+    if (verdict === 'APPROVED') {
+      const conflictingLine = leadingLines.find(isConflictingApprovalLine);
+      if (conflictingLine) {
+        return {
+          status: 'invalid',
+          approved: false,
+          feedback: `${feedback}\n\n${AMBIGUOUS_APPROVAL_FEEDBACK}`,
+          reason: 'conflicting text before approved machine verdict',
+        };
+      }
+      return { status: 'approved', approved: true, feedback };
+    }
+
+    return { status: 'rejected', approved: false, feedback };
+  }
+  if (machineVerdicts.length > 1) {
+    return { status: 'invalid', approved: false, feedback, reason: 'multiple machine verdict lines' };
   }
 
   if (!isApprovedVerdictLine(meaningfulLines[0])) {
-    return { approved: false, feedback };
+    if (isLegacyRejectionReply(meaningfulLines)) {
+      return { status: 'rejected', approved: false, feedback };
+    }
+    if (containsApprovalIntent(feedback) && !APPROVAL_NEGATIVE_SIGNAL.test(feedback.toLowerCase())) {
+      return { status: 'invalid', approved: false, feedback, reason: 'approval-like response without machine verdict' };
+    }
+    return { status: 'rejected', approved: false, feedback };
   }
 
   const conflictingLine = meaningfulLines.slice(1).find(isConflictingApprovalLine);
   if (conflictingLine) {
     return {
+      status: 'rejected',
       approved: false,
       feedback: `${feedback}\n\n${AMBIGUOUS_APPROVAL_FEEDBACK}`,
     };
   }
 
-  return { approved: true, feedback };
+  return { status: 'approved', approved: true, feedback };
+}
+
+function isLegacyRejectionReply(lines) {
+  const first = lines[0]?.replace(/\s+/g, ' ').trim().toLowerCase() ?? '';
+  if (/^not approved\b/.test(first)) return true;
+  if (APPROVAL_NEGATIVE_SIGNAL.test(lines.join('\n').toLowerCase())) return true;
+  if (/^(?:[-*]|\d+[.)])\s+/.test(first) && APPROVAL_NEGATIVE_SIGNAL.test(first)) return true;
+  if (/^(?:issues?|problems?|remaining(?: issues?)?|fix(?:es)?|todo)\b/.test(first)) return true;
+  return !containsApprovalIntent(lines.join('\n'));
+}
+
+function containsApprovalIntent(text) {
+  return /\bapproved\b|\bapprove\b|\blooks\s+good\b|\blgtm\b|\bready\s+(?:to|for)\b/i.test(String(text ?? ''));
 }
 
 export function createLoopEngine({ config }) {
@@ -424,7 +478,7 @@ async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, confi
       workspaceChangeSummary = formatWorkspaceChangeSummary(workspaceChangeTracker.summarize());
     }
 
-    const reviewer = await reviewerManager.getForTurn();
+    let reviewer = await reviewerManager.getForTurn();
     updateRecovery((nextState) => {
       writeRoleRecovery(nextState, authorManager, reviewerManager);
       nextState.loop.roundLimit = roundLimit;
@@ -434,7 +488,7 @@ async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, confi
       nextState.loop.pending = { type: 'reviewer-turn', round, started: true, authorReply, workspaceChangeSummary };
       delete nextState.loop.error;
     });
-    const reply = await runTurnWithAcpRecovery({
+    let reply = await runTurnWithAcpRecovery({
       round,
       role: 'REVIEWER',
       manager: reviewerManager,
@@ -446,7 +500,22 @@ async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, confi
       updateRecovery,
     });
 
-    ({ approved, feedback } = interpretReviewerReply(reply));
+    let verdict = interpretReviewerReply(reply);
+    if (verdict.status === 'invalid') {
+      verdict = await repairReviewerVerdict({
+        initialReply: reply,
+        initialVerdict: verdict,
+        round,
+        reviewerManager,
+        authorManager,
+        maxRetries: config.verdictRepairMaxRetries,
+        renderer,
+        updateRecovery,
+      });
+      reply = verdict.feedback;
+    }
+
+    ({ approved, feedback } = verdict);
     if (approved && config.dangerIgnoreApproval && round < roundLimit) {
       pending = { type: 'author-turn', round: round + 1, started: false };
       updateRecovery((nextState) => {
@@ -770,6 +839,76 @@ async function runTurnWithAcpRecovery({ round, role, manager, state, authorManag
     });
     return runTurn({ round, role, state: retryState, prompt, renderer });
   }
+}
+
+async function repairReviewerVerdict({ initialReply, initialVerdict, round, reviewerManager, authorManager, maxRetries, renderer, updateRecovery }) {
+  let latestReply = initialReply;
+  let latestVerdict = initialVerdict;
+  const retryLimit = normalizeVerdictRepairMaxRetries(maxRetries);
+  for (let attempt = 1; attempt <= retryLimit; attempt++) {
+    const reviewer = await reviewerManager.getForTurn();
+    latestReply = await runTurnWithAcpRecovery({
+      round,
+      role: 'REVIEWER',
+      manager: reviewerManager,
+      state: reviewer,
+      authorManager,
+      reviewerManager,
+      prompt: createVerdictRepairPrompt({ attempt, maxRetries: retryLimit, previousReply: latestReply, reason: latestVerdict?.reason }),
+      renderer,
+      updateRecovery,
+    });
+    latestVerdict = interpretReviewerReply(latestReply);
+    if (latestVerdict.status === 'approved') return latestVerdict;
+    if (latestVerdict.status === 'rejected') {
+      return {
+        ...latestVerdict,
+        feedback: initialVerdict?.feedback || latestVerdict.feedback,
+      };
+    }
+  }
+
+  const error = new Error([
+    `Reviewer did not provide a valid SPAR_VERDICT after ${retryLimit} repair attempt(s).`,
+    '',
+    'Expected exactly one final verdict line:',
+    'SPAR_VERDICT: APPROVED',
+    'or',
+    'SPAR_VERDICT: REJECTED',
+    '',
+    'Last reviewer reply:',
+    String(latestReply ?? '').trim() || '<empty>',
+  ].join('\n'));
+  error.name = 'ReviewerVerdictError';
+  throw error;
+}
+
+function createVerdictRepairPrompt({ attempt, maxRetries, previousReply, reason }) {
+  return [
+    `Your previous review did not include a valid machine-readable Spar verdict (${attempt}/${maxRetries}).`,
+    reason ? `Parser reason: ${reason}.` : null,
+    '',
+    'Do not continue reviewing. Do not add new analysis. Do not modify files.',
+    'Keep your decision consistent with your previous review, and reply with exactly one of these two lines:',
+    '',
+    'SPAR_VERDICT: APPROVED',
+    'SPAR_VERDICT: REJECTED',
+    '',
+    'Choose APPROVED only if your previous review meant the task is complete and no concrete fixes remain.',
+    'Choose REJECTED if your previous review listed any remaining required fix, uncertainty, blocker, or missing validation.',
+    '',
+    'No markdown. No bullet list. No explanation. Output exactly one line.',
+    '',
+    'Previous review:',
+    '---',
+    String(previousReply ?? '').trim() || '<empty>',
+    '---',
+  ].filter(Boolean).join('\n');
+}
+
+function normalizeVerdictRepairMaxRetries(value) {
+  if (Number.isInteger(value) && value >= 0) return value;
+  return DEFAULT_VERDICT_REPAIR_MAX_RETRIES;
 }
 
 function assignRoleRecovery(target, role, snapshot) {

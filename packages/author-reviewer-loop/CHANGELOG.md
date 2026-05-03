@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-03
+
+### Fixed
+
+- Reviewer approval detection now uses a machine-readable `SPAR_VERDICT: APPROVED` / `SPAR_VERDICT: REJECTED` contract. Approval-like replies without the verdict trigger an internal reviewer repair prompt up to three times instead of incorrectly sending AUTHOR into another turn.
+- Saved ACP session recovery now only falls back to a fresh session for true stale-session errors. Transport, timeout, and service failures during `loadSession` surface as startup errors instead of silently discarding recovery.
+
 ## [0.8.0] - 2026-05-02
 
 ### Added

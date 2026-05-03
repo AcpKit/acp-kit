@@ -26,6 +26,9 @@ This pass focused on user-visible loop termination and recovery behavior in `@ac
 - **Interrupted approval resume:** If the process stops while approval is pending, the next matching run must resume from the approval decision instead of rerunning agent turns or emitting duplicate final results.
 - **Engine/store roundtrip gap:** Recovery written by the real engine must deserialize through the real store and resume from the persisted pending action shape without mocked shortcuts.
 - **Stale saved sessions:** If a persisted ACP session id no longer exists, startup must fall back to a fresh session instead of failing the whole run.
+- **Transient session-resume failures:** If ACP `loadSession` fails for reasons other than a missing saved session, Spar must surface the real startup error instead of silently discarding recovery and starting fresh.
+- **Wrapped stale-session errors:** If ACP wraps an "unknown session" or not-found failure inside nested `cause`/`reason`/`detail` objects, Spar must still recognize it as stale recovery and reopen a fresh session.
+- **Service and transport resume failures:** `503`, `ECONNREFUSED`, timeout, or other live backend/transport failures during `loadSession` must abort startup instead of misclassifying the session as stale.
 - **Malformed recovery state:** Corrupt recovery files must be quarantined so a fresh run still starts.
 - **Recovery write exhaustion:** Disk-full or write failures while checkpointing recovery state must disable further recovery persistence instead of breaking the active run.
 - **Approval continuation refresh:** If an approval is reopened exactly when session turn limits are exhausted, fresh author/reviewer sessions must be used and retired sessions must be closed without losing the continuation feedback.
@@ -57,6 +60,8 @@ This pass focused on user-visible loop termination and recovery behavior in `@ac
 - `test/engine.test.ts` asserts recovery state written by the real engine survives a real on-disk store roundtrip after interruption and resumes directly at reviewer verification on restart.
 - `test/run-recovery.test.ts` asserts malformed recovery files are quarantined, config mismatches are rejected, and recovery write failures disable persistence without crashing the run.
 - `test/runtime-role.test.ts` asserts `openRole` uses ACP `loadSession` for saved sessions and falls back cleanly when the saved session is gone.
+- `test/runtime-role.test.ts` asserts `openRole` only falls back for true stale-session errors such as not-found responses, while timeout or transport failures from `loadSession` still abort startup with the original error.
+- `test/runtime-role.test.ts` asserts nested wrapped stale-session causes still trigger fresh-session recovery, while nested non-stale causes and `503`/`ECONNREFUSED` resume failures continue to surface the real error.
 - `test/engine.test.ts` asserts non-SGR terminal control sequences, including OSC with ST terminators, around clean approval verdicts are stripped before parsing.
 - `test/engine.test.ts` asserts mixed-case approval tokens are intentionally tolerated when follow-up notes are clean.
 - `test/engine.test.ts` asserts masked contradictions with dependency/startup crash language are rejected.
