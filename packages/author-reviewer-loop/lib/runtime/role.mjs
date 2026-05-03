@@ -3,11 +3,11 @@ import {
   PermissionDecision,
   createAcpRuntime,
   createRuntimeInspector,
+  enforceRealWorkspaceSession,
   openOrCreateRuntimeSession,
 } from '@acp-kit/core';
 import { createLocalFileSystemHost, createLocalTerminalHost, nodeChildProcessTransport } from '@acp-kit/core/node';
 import { formatEnvAssignment } from '../config/shell.mjs';
-import { enforceRealWorkspaceSession } from './real-workspace.mjs';
 import { createStartupProfiler, roleStatusMessageForPhase } from './startup-profile.mjs';
 
 export async function openRole({ role, settings, cwd, trace, captureTrace, renderer, recovery }) {

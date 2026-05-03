@@ -5,8 +5,8 @@ import {
   GitHubCopilot,
   OpenCode,
   QwenCode,
+  withRealWorkspaceDefaults,
 } from '@acp-kit/core';
-import { withRealWorkspaceDefaults } from '../runtime/real-workspace.mjs';
 
 export const SparClaudeCode = withRealWorkspaceDefaults(ClaudeCode);
 export const SparCodexCli = withRealWorkspaceDefaults(CodexCli);

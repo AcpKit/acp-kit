@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@acp-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@acp-kit/core')>();
+  const realWorkspace = await import('../../core/src/real-workspace.ts');
   const sessionRecovery = await import('../../core/src/session-recovery.ts');
   return {
     ...actual,
@@ -43,6 +44,7 @@ vi.mock('@acp-kit/core', async (importOriginal) => {
       }),
       toJSONL: vi.fn(() => ''),
     })),
+    enforceRealWorkspaceSession: realWorkspace.enforceRealWorkspaceSession,
     openOrCreateRuntimeSession: sessionRecovery.openOrCreateRuntimeSession,
   };
 });
