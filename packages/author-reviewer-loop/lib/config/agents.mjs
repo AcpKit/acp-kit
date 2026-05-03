@@ -8,17 +8,27 @@ import {
   withRealWorkspaceDefaults,
 } from '@acp-kit/core';
 
-export const SparClaudeCode = withRealWorkspaceDefaults(ClaudeCode);
-export const SparCodexCli = withRealWorkspaceDefaults(CodexCli);
-
-export const agents = {
-  claude: SparClaudeCode,
-  codex: SparCodexCli,
+export const baseAgents = Object.freeze({
+  claude: ClaudeCode,
+  codex: CodexCli,
   copilot: GitHubCopilot,
   gemini: GeminiCli,
   opencode: OpenCode,
   qwen: QwenCode,
-};
+});
+
+export const SparClaudeCode = withRealWorkspaceDefaults(ClaudeCode);
+export const SparCodexCli = withRealWorkspaceDefaults(CodexCli);
+
+export const agents = Object.freeze({
+  ...baseAgents,
+  claude: SparClaudeCode,
+  codex: SparCodexCli,
+});
+
+export function agentsForRealWorkspace(realWorkspace = true) {
+  return realWorkspace ? agents : baseAgents;
+}
 
 export const agentChoices = Object.freeze(Object.entries(agents).map(([id, agent]) => ({
   id,

@@ -8,6 +8,9 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+### Added
+- `@acp-kit/core` now exposes reusable helpers for ACP session recovery, real-workspace agent policies, and session turn-budget rotation so long-running ACP applications can share the same recovery and workspace-safety behavior used by Spar.
+
 ## [0.8.1] - 2026-05-03
 
 ### Changed

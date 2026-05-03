@@ -75,6 +75,9 @@ function checkRealWorkspacePolicies(config) {
     ['AUTHOR', config.authorSettings],
     ['REVIEWER', config.reviewerSettings],
   ].map(([role, settings]) => {
+    if (config.realWorkspace === false) {
+      return { status: 'warn', label: `${role} real workspace`, message: 'explicitly disabled for this run' };
+    }
     const summary = summarizeRealWorkspacePolicy(settings?.agent);
     if (!summary) {
       return { status: 'warn', label: `${role} real workspace`, message: 'no Spar-specific real-workspace policy for this agent' };

@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
-import { agents, defaults } from '../config/agents.mjs';
+import { agentsForRealWorkspace, defaults } from '../config/agents.mjs';
 import { readPreferences, normalizePreferences, preferencesFilePath as defaultPreferencesFilePath } from '../config/preferences.mjs';
 import { env, envFlag, envPositiveInt, envStrictPositiveInt } from './env.mjs';
 
@@ -22,6 +22,7 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
     .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
     .option('--doctor', 'run local Spar environment diagnostics and exit')
     .option('--danger-ignore-approval', 'danger: ignore reviewer approval and always run all MAX_ROUNDS rounds')
+    .option('--no-real-workspace', 'explicitly disable Spar real-workspace launch/session defaults')
     .option('--quality <quality>', 'quality level: prod|dev')
     .version(readPackageVersion(), '-v, --version', 'output the current version')
     .addHelpText('after', `
@@ -39,6 +40,7 @@ Environment:
   ACP_REVIEW_CLI=1                                          use the plain line-based renderer
   ACP_REVIEW_TUI=1                                          use the Ink TUI renderer (default)
   ACP_REVIEW_TRACE=1                                        print inspector trace on startup failures
+  SPAR_REAL_WORKSPACE=0                                     explicitly disable real-workspace defaults
   ACP_REVIEW_EDITOR_TIMEOUT_MS=<ms>                         TUI task editor timeout (default: 1800000)
 `)
     .action((cwdArg, taskParts) => {
@@ -56,6 +58,8 @@ Environment:
   const { task, taskSource } = resolveTask(parsedArgs.taskParts || [], cwd);
   const tui = opts.doctor ? false : resolveRendererMode(opts);
   const quality = resolveQuality(opts);
+  const realWorkspace = resolveRealWorkspaceMode(opts);
+  const availableAgents = agentsForRealWorkspace(realWorkspace);
   const resolvedPreferencesPath = preferencesPath ?? defaultPreferencesFilePath();
   const saved = normalizePreferences(preferences ?? readPreferences({ filePath: resolvedPreferencesPath }));
   const authorResolved = resolveRoleConfig({
@@ -66,6 +70,7 @@ Environment:
     saved,
     defaultAgent: defaults.authorAgent,
     defaultModel: defaults.authorModel,
+    availableAgents,
     useBuiltInDefaults: !tui,
   });
   const reviewerResolved = resolveRoleConfig({
@@ -76,6 +81,7 @@ Environment:
     saved,
     defaultAgent: defaults.reviewerAgent,
     defaultModel: defaults.reviewerModel,
+    availableAgents,
     useBuiltInDefaults: !tui,
   });
 
@@ -88,6 +94,7 @@ Environment:
     version: readPackageVersion(),
     maxRounds: envPositiveInt('MAX_ROUNDS', defaults.maxRounds),
     quality,
+    realWorkspace,
     trace: envFlag('ACP_REVIEW_TRACE'),
     skipConfirm: Boolean(opts.yes) || envFlag('ACP_REVIEW_YES'),
     tui,
@@ -144,13 +151,8 @@ function readPackageVersion() {
   }
 }
 
-export function applyRoleSelection(config, { author, reviewer }) {
-  applyOneRole(config.authorSettings, author);
-  applyOneRole(config.reviewerSettings, reviewer);
-}
-
-function applyOneRole(settings, selection) {
-  const agent = agents[selection?.agentId];
+function applyOneRole(settings, selection, availableAgents = agentsForRealWorkspace(true)) {
+  const agent = availableAgents[selection?.agentId];
   if (!agent) {
     throw createConfigurationError(`Selected agent "${selection?.agentId}" is not supported.`);
   }
@@ -161,6 +163,12 @@ function applyOneRole(settings, selection) {
   settings.modelSource = selection.modelSource ?? 'tui';
 }
 
+export function applyRoleSelection(config, { author, reviewer }) {
+  const availableAgents = agentsForRealWorkspace(config.realWorkspace !== false);
+  applyOneRole(config.authorSettings, author, availableAgents);
+  applyOneRole(config.reviewerSettings, reviewer, availableAgents);
+}
+
 function resolveRoleConfig({
   role,
   agentEnvName,
@@ -169,6 +177,7 @@ function resolveRoleConfig({
   saved,
   defaultAgent,
   defaultModel,
+  availableAgents,
   useBuiltInDefaults,
 }) {
   const savedRole = saved[role] ?? {};
@@ -184,14 +193,14 @@ function resolveRoleConfig({
     emptyEnvValue: null,
   });
   const agentId = agentValue.value ? String(agentValue.value).toLowerCase() : undefined;
-  if (agentId && !agents[agentId]) {
+  if (agentId && !availableAgents[agentId]) {
     throw createConfigurationError(
-      `${agentValue.source === 'env' ? agentEnvName : `${role}.agent in ${preferencesPath}`}=${agentId} is not supported. Use one of: ${Object.keys(agents).join(', ')}.`,
+      `${agentValue.source === 'env' ? agentEnvName : `${role}.agent in ${preferencesPath}`}=${agentId} is not supported. Use one of: ${Object.keys(availableAgents).join(', ')}.`,
     );
   }
 
   return {
-    agent: agentId ? agents[agentId] : null,
+    agent: agentId ? availableAgents[agentId] : null,
     agentId,
     agentSource: agentValue.source,
     model: modelValue.value,
@@ -343,6 +352,12 @@ function resolveQuality(opts) {
   const raw = String(opts.quality ?? process.env.SPAR_QUALITY ?? 'prod').trim().toLowerCase();
   if (raw === 'prod' || raw === 'dev') return raw;
   throw createConfigurationError(`Invalid quality "${raw}". Use "prod" or "dev".`);
+}
+
+function resolveRealWorkspaceMode(opts) {
+  if (opts.realWorkspace === false) return false;
+  if ('SPAR_REAL_WORKSPACE' in process.env) return envFlag('SPAR_REAL_WORKSPACE');
+  return true;
 }
 
 function resolveRendererMode(opts) {

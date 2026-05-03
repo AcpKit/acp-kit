@@ -20,6 +20,8 @@ npx @acp-kit/spar .\demo-workspace "Create a Node.js CLI that counts word freque
 
 Use an empty or disposable directory. After confirmation, Spar allows the selected agents to use filesystem and terminal tools in that workspace.
 
+Real-workspace execution is the default for supported agents. Use `--no-real-workspace` or `SPAR_REAL_WORKSPACE=0` only when you explicitly want to disable Spar's launch/session defaults for Codex and Claude Code.
+
 The task can be inline text or a relative/absolute UTF-8 text file. If the argument resolves to a file, Spar reads it once at startup.
 
 ## Requirements
@@ -90,7 +92,7 @@ MAX_ROUNDS=5 npx @acp-kit/spar ./demo-workspace "Stress-test the implementation"
 ## Options
 
 ```bash
-npx @acp-kit/spar <cwd> <task-or-task-file> [--yes] [--cli] [--tui] [--quality prod|dev] [--doctor] [--danger-ignore-approval]
+npx @acp-kit/spar <cwd> <task-or-task-file> [--yes] [--cli] [--tui] [--quality prod|dev] [--doctor] [--danger-ignore-approval] [--no-real-workspace]
 ```
 
 Key environment variables:
@@ -102,6 +104,7 @@ Key environment variables:
 | `MAX_ROUNDS` | Maximum author/reviewer iterations. Default: `20`. |
 | `AUTHOR_SESSION_TURNS`, `REVIEWER_SESSION_TURNS` | Per-role ACP session refresh limits. Default: `20`. |
 | `SPAR_QUALITY` | `prod` or `dev`. |
+| `SPAR_REAL_WORKSPACE=0` | Explicitly disable Spar real-workspace launch/session defaults. |
 | `ACP_REVIEW_YES=1` | Skip the ordinary start prompt. |
 | `ACP_REVIEW_CLI=1` | Use the line-based renderer. |
 | `SPAR_RUN_RECOVERY`, `SPAR_RUN_TRACE`, `SPAR_SESSION_RECORD` | Enable/disable local recovery, trace, and session records. |

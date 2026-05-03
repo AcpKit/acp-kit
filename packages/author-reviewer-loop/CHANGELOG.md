@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit real-workspace opt-out via `--no-real-workspace` and `SPAR_REAL_WORKSPACE=0`. Real-workspace execution remains the default for supported agents.
+
+### Changed
+
+- Spar now uses the shared `@acp-kit/core` helpers for saved session recovery, real-workspace policy, and per-role ACP session turn rotation.
+
 ## [0.8.1] - 2026-05-03
 
 ### Fixed

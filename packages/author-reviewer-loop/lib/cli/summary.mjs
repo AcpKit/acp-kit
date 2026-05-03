@@ -1,4 +1,4 @@
-export function formatRunSummary({ cwd, task, taskSource, authorSettings, reviewerSettings, maxRounds, trace, tui }) {
+export function formatRunSummary({ cwd, task, taskSource, authorSettings, reviewerSettings, maxRounds, trace, tui, realWorkspace = true }) {
   return `Run configuration
   cwd:            ${cwd}
   task source:    ${taskSource?.kind === 'file' ? taskSource.path : '(inline text)'}
@@ -10,6 +10,7 @@ export function formatRunSummary({ cwd, task, taskSource, authorSettings, review
   reviewer model: ${reviewerSettings.model || '(agent default)'}
   reviewer session: ${reviewerSettings.sessionTurns} turn(s)
   max rounds:     ${maxRounds}
+  real workspace: ${realWorkspace ? 'enabled' : 'disabled'}
   trace:          ${trace ? 'enabled' : 'disabled'}
   renderer:       ${tui ? 'tui (ink)' : 'plain'}
 `;

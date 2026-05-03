@@ -25,6 +25,7 @@ beforeEach(() => {
   delete process.env.AUTHOR_SESSION_TURNS;
   delete process.env.REVIEWER_SESSION_TURNS;
   delete process.env.SPAR_QUALITY;
+  delete process.env.SPAR_REAL_WORKSPACE;
   delete process.env.ACP_REVIEW_CLI;
   delete process.env.ACP_REVIEW_TUI;
 });
@@ -75,6 +76,7 @@ describe('author-reviewer-loop CLI config', () => {
     expect(result.stdout).toContain('-v, --version');
     expect(result.stdout).toContain('--doctor');
     expect(result.stdout).toContain('--danger-ignore-approval');
+    expect(result.stdout).toContain('--no-real-workspace');
     expect(result.stderr).toBe('');
   });
 
@@ -335,6 +337,29 @@ describe('author-reviewer-loop CLI config', () => {
     ]);
   });
 
+  it('requires an explicit opt-out to disable real-workspace launch defaults', () => {
+    const enabled = parseConfig([tempDir(), 'Build the thing', '--yes', '--cli']);
+    expect(enabled.realWorkspace).toBe(true);
+    expect(enabled.reviewerSettings.agent.args).toEqual(expect.arrayContaining([
+      'sandbox_mode="danger-full-access"',
+      'approval_policy="never"',
+    ]));
+
+    const disabled = parseConfig([tempDir(), 'Build the thing', '--yes', '--cli', '--no-real-workspace']);
+    expect(disabled.realWorkspace).toBe(false);
+    expect(disabled.reviewerSettings.agent.args).toEqual([]);
+    expect(disabled.reviewerSettings.agent.fallbackCommands?.[0]?.args).toEqual(['--yes', '@zed-industries/codex-acp@latest']);
+  });
+
+  it('lets SPAR_REAL_WORKSPACE=0 explicitly disable real-workspace defaults', () => {
+    process.env.SPAR_REAL_WORKSPACE = '0';
+
+    const config = parseConfig([tempDir(), 'Build the thing', '--yes', '--cli']);
+
+    expect(config.realWorkspace).toBe(false);
+    expect(config.reviewerSettings.agent.args).toEqual([]);
+  });
+
   it('reports invalid startup config through the CLI formatter', () => {
     const error = new Error('AUTHOR_AGENT=missing-agent is not supported. Use one of: claude, codex, copilot, gemini, opencode, qwen.');
     error.name = 'ConfigurationError';
@@ -401,6 +426,13 @@ describe('author-reviewer-loop CLI config', () => {
     const config = parseConfig([tempDir(), task, '--yes', '--cli']);
 
     expect(formatRunSummary(config)).toContain(`task:           ${task}`);
+    expect(formatRunSummary(config)).toContain('real workspace: enabled');
+  });
+
+  it('formats explicit real-workspace opt-out in the confirmation summary', () => {
+    const config = parseConfig([tempDir(), 'build it', '--yes', '--cli', '--no-real-workspace']);
+
+    expect(formatRunSummary(config)).toContain('real workspace: disabled');
   });
 
   it('uses edited task text in future prompts', () => {

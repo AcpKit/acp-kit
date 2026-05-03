@@ -56,6 +56,17 @@ describe('spar doctor', () => {
     expect(formatDoctorReport(report)).toContain('FAIL REVIEWER agent');
   });
 
+  it('reports when real-workspace policy is explicitly disabled', () => {
+    const report = createDoctorReport({ ...config(), realWorkspace: false }, {
+      nodeVersion: '20.11.0',
+      detectAgents: (agentList) => agentList.map((agent) => ({ agent, installed: true })),
+    });
+
+    expect(report.ok).toBe(true);
+    expect(formatDoctorReport(report)).toContain('WARN AUTHOR real workspace: explicitly disabled for this run');
+    expect(formatDoctorReport(report)).toContain('WARN REVIEWER real workspace: explicitly disabled for this run');
+  });
+
   it('is exposed by the real CLI entry point without starting a Spar run', () => {
     const cwd = tempDir();
     const result = spawnSync(process.execPath, [CLI_BIN, cwd, 'diagnose environment', '--doctor', '--cli'], {

@@ -61,6 +61,8 @@ console.log(result.text);
 
 `createAcpRuntime(...)` defaults to approving tool permissions once and selecting the first offered auth method. See [Getting Started](docs/getting-started.md) for explicit host policy, the full event vocabulary, multi-session use, and how to debug startup / auth failures.
 
+Long-running applications can reuse the same lower-level helpers Spar uses: `openOrCreateRuntimeSession(...)` resumes saved ACP sessions without hiding transport failures, `withRealWorkspaceDefaults(...)` / `enforceRealWorkspaceSession(...)` apply explicit real-workspace policies for supported agents, and `createSessionTurnManager(...)` rotates sessions after a configured turn budget.
+
 For a one-shot prompt, the helper API handles session disposal and yields the same event stream. Use `onRuntimeEvent(...)` only when you already have an event value, such as inside this `for await` loop; when you have a `RuntimeSession`, prefer `session.on(...)`.
 
 ```ts
