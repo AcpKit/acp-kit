@@ -37,14 +37,16 @@ export const agentChoices = Object.freeze(Object.entries(agents).map(([id, agent
 
 export const modelChoices = Object.freeze({
   claude: [
+    { id: 'claude-opus-4-7-1m', label: 'claude-opus-4-7-1m', value: 'claude-opus-4-7-1m' },
+    { id: 'claude-opus-4-7', label: 'claude-opus-4-7', value: 'claude-opus-4-7' },
     { id: 'opus', label: 'opus', value: 'opus' },
     { id: 'default', label: 'default (agent default)', value: null },
   ],
   codex: [
     { id: 'gpt-5.5', label: 'gpt-5.5', value: 'gpt-5.5' },
-    { id: 'gpt-5.4/medium', label: 'gpt-5.4/medium', value: 'gpt-5.4/medium' },
+    { id: 'gpt-5.4/xhigh', label: 'gpt-5.4/xhigh', value: 'gpt-5.4/xhigh' },
     { id: 'gpt-5.4/high', label: 'gpt-5.4/high', value: 'gpt-5.4/high' },
-    { id: 'gpt-5.5/xhigh', label: 'gpt-5.5/xhigh', value: 'gpt-5.5/xhigh' },
+    { id: 'gpt-5.4/medium', label: 'gpt-5.4/medium', value: 'gpt-5.4/medium' },
   ],
   copilot: [
     { id: 'gpt-5.4', label: 'gpt-5.4', value: 'gpt-5.4' },

@@ -58,10 +58,17 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
       'Tab',
       '\u2191/\u2193',
       'Space',
+      'm',
+      'l',
       'Enter',
       '?',
       'q',
     ]);
+  });
+
+  it('keeps custom model entry available directly from setup with m', () => {
+    expect(formatTuiSetupFooterKeys({ mode: 'summary' })).toContain('m');
+    expect(formatTuiSetupFooterKeys({ mode: 'model' })).toContain('c');
   });
 
   it('omits advanced diagnostic state from the launch confirmation summary', () => {

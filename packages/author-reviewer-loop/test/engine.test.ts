@@ -193,7 +193,7 @@ describe('author-reviewer-loop engine', () => {
     expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(2);
   });
 
-  it('repairs contradictory approved machine verdict replies instead of accepting them', async () => {
+  it('rejects contradictory approved machine verdict replies without giving repair a chance to override issues', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
@@ -202,8 +202,7 @@ describe('author-reviewer-loop engine', () => {
     mocks.runTurn.mockImplementation(async ({ role, prompt }: { role: 'AUTHOR' | 'REVIEWER'; prompt: string }) => {
       if (role === 'AUTHOR') return 'implemented durable fix';
       if (prompt.includes('Your previous review did not include a valid machine-readable Spar verdict')) {
-        expect(prompt).toContain('conflicting text before approved machine verdict');
-        return 'SPAR_VERDICT: REJECTED';
+        throw new Error('contradictory approved verdict should not enter verdict repair');
       }
       return '1. Remaining issue: Linux startup is still broken.\nSPAR_VERDICT: APPROVED';
     });
@@ -213,7 +212,7 @@ describe('author-reviewer-loop engine', () => {
     expect(result).toMatchObject({ approved: false, rounds: 1 });
     expect(result.feedback).toContain('Remaining issue: Linux startup is still broken.');
     expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR')).toHaveLength(1);
-    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(2);
+    expect(mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'REVIEWER')).toHaveLength(1);
   });
 
   it('stops with a verdict error after the internal repair retry budget is exhausted', async () => {

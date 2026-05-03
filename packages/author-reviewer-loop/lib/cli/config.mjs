@@ -318,6 +318,8 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspa
     'Use the AUTHOR reply as a report of claimed work, not as evidence. Double-check claimed changes against the actual project files before judging.',
     'Treat the observed workspace-change summary as a fact to investigate. If it says no disk changes were detected, verify whether the task could truly be complete without edits before approving.',
     'If this workspace is a git repository, git status/diff can help identify changes; if it is not a git repository, inspect the relevant files directly instead.',
+    'Verdict consistency is mandatory: if you list any remaining issue, required fix, uncertainty, blocker, missing validation, regression risk, or unresolved concern anywhere in your review, your final verdict MUST be SPAR_VERDICT: REJECTED.',
+    'Never output SPAR_VERDICT: APPROVED in the same reply as unresolved issue text.',
   ];
 
   if (quality === 'dev') {
@@ -330,7 +332,7 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspa
       '3. Relevant validation was run when practical.',
       '',
       'End your reply with exactly one machine-readable verdict line: SPAR_VERDICT: APPROVED or SPAR_VERDICT: REJECTED.',
-      'Use SPAR_VERDICT: APPROVED only if the task is completed. Use SPAR_VERDICT: REJECTED when concrete fixes are still needed.',
+      'Use SPAR_VERDICT: APPROVED only if the task is completed and your review contains no unresolved issue text. Use SPAR_VERDICT: REJECTED when concrete fixes are still needed.',
     );
     return prompt.filter(Boolean).join('\n');
   }
@@ -342,7 +344,7 @@ function createReviewerPrompt({ cwd, task, round, feedback, authorReply, workspa
     'Reject vanity tests, over-idealized mocks, gaps in recovery behavior, and approval based only on happy paths or local file diffs.',
     'Do not assume nothing changed just because earlier rounds looked different.',
     'End your reply with exactly one machine-readable verdict line: SPAR_VERDICT: APPROVED or SPAR_VERDICT: REJECTED.',
-    'Use SPAR_VERDICT: APPROVED only if the project now fully solves the task, the tests are genuinely convincing, and no obvious bugs or omissions remain; otherwise use SPAR_VERDICT: REJECTED and include a terse numbered list of issues with concrete fix guidance when useful.',
+    'Use SPAR_VERDICT: APPROVED only if the project now fully solves the task, the tests are genuinely convincing, your review contains no unresolved issue text, and no obvious bugs or omissions remain; otherwise use SPAR_VERDICT: REJECTED and include a terse numbered list of issues with concrete fix guidance when useful.',
     'Prefer actionable suggestions over questions; mention exact files, flows, or failure modes that still need work.',
   );
   return prompt.filter(Boolean).join('\n');

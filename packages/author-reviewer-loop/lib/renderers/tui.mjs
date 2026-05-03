@@ -494,8 +494,8 @@ export function formatTuiHelpKeybindings() {
 
 export function formatTuiSetupFooterKeys({ mode = 'summary', taskTruncated = false } = {}) {
   if (mode === 'customModel') return ['type', 'Enter', 'Esc', 'q'];
-  if (mode === 'model') return ['\u2191/\u2193', 'Enter', 'Esc/b', 'q'];
-  return ['Tab', '\u2191/\u2193', 'Space', 'Enter', '?', 'q'];
+  if (mode === 'model') return ['\u2191/\u2193', 'Enter', 'c', 'Esc/b', 'q'];
+  return ['Tab', '\u2191/\u2193', 'Space', 'm', 'l', 'Enter', '?', 'q'];
 }
 
 export function formatTuiConfirmSummaryRows(config = {}) {
@@ -1956,6 +1956,8 @@ export async function runTui({ config }) {
           } else if (input === ' ') {
             dispatchView({ type: 'setupAssignAgent' });
           } else if (input === 'm' || input === 'M') {
+            dispatchView({ type: 'setupCustomModelMode' });
+          } else if (input === 'l' || input === 'L') {
             dispatchView({ type: 'setupModelMode' });
           } else if (input === 's' || input === 'S') {
             dispatchView({ type: 'setupToggleSave' });

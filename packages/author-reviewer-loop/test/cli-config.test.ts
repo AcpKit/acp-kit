@@ -318,9 +318,18 @@ describe('author-reviewer-loop CLI config', () => {
   it('uses the supported Codex model variants', () => {
     expect(modelChoicesForAgent('codex').map((choice) => choice.value)).toEqual([
       'gpt-5.5',
-      'gpt-5.4/medium',
+      'gpt-5.4/xhigh',
       'gpt-5.4/high',
-      'gpt-5.5/xhigh',
+      'gpt-5.4/medium',
+    ]);
+  });
+
+  it('uses the supported Claude Code model variants', () => {
+    expect(modelChoicesForAgent('claude').map((choice) => choice.value)).toEqual([
+      'claude-opus-4-7-1m',
+      'claude-opus-4-7',
+      'opus',
+      null,
     ]);
   });
 
@@ -507,6 +516,8 @@ describe('author-reviewer-loop CLI config', () => {
     expect(prompt).toContain('Double-check claimed changes against the actual project files before judging.');
     expect(prompt).toContain('If this workspace is a git repository, git status/diff can help identify changes');
     expect(prompt).toContain('if it is not a git repository, inspect the relevant files directly instead.');
+    expect(prompt).toContain('if you list any remaining issue, required fix, uncertainty, blocker, missing validation, regression risk, or unresolved concern anywhere in your review, your final verdict MUST be SPAR_VERDICT: REJECTED');
+    expect(prompt).toContain('Never output SPAR_VERDICT: APPROVED in the same reply as unresolved issue text.');
     expect(prompt).toContain('Review the current project state and relevant modifications as a whole');
     expect(prompt).toContain('not only the files or summary mentioned by the AUTHOR');
     expect(prompt).toContain('translated the quality bar into concrete execution');

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-04
+
 ### Added
 
 - Added explicit real-workspace opt-out via `--no-real-workspace` and `SPAR_REAL_WORKSPACE=0`. Real-workspace execution remains the default for supported agents.
@@ -13,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Spar now uses the shared `@acp-kit/core` helpers for saved session recovery, real-workspace policy, and per-role ACP session turn rotation.
+- TUI setup now restores `m` as the direct custom model entry shortcut, with `l` opening the predefined model list. Codex presets now list `gpt-5.5`, `gpt-5.4/xhigh`, `gpt-5.4/high`, and `gpt-5.4/medium`; Claude Code presets now include `claude-opus-4-7-1m` and `claude-opus-4-7`.
+
+### Fixed
+
+- Reviewer prompts now explicitly forbid `SPAR_VERDICT: APPROVED` when the same review lists remaining issues, blockers, missing validation, regression risk, or unresolved concerns.
+- Reviewer replies that explicitly list remaining issues are now treated as rejection even if they end with `SPAR_VERDICT: APPROVED`; Spar no longer lets verdict repair override concrete unresolved issue text.
 
 ## [0.8.1] - 2026-05-03
 

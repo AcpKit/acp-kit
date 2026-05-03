@@ -117,10 +117,9 @@ function interpretReviewerReply(text) {
       const conflictingLine = leadingLines.find(isConflictingApprovalLine);
       if (conflictingLine) {
         return {
-          status: 'invalid',
+          status: 'rejected',
           approved: false,
           feedback: `${feedback}\n\n${AMBIGUOUS_APPROVAL_FEEDBACK}`,
-          reason: 'conflicting text before approved machine verdict',
         };
       }
       return { status: 'approved', approved: true, feedback };
