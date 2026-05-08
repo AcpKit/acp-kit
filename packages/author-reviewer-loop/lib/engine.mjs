@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { createSessionTurnManager } from '@acp-kit/core';
 import { PaneStatus, Phase, initialState, reduce } from './engine/state.mjs';
-import { closeRole, openRole } from './runtime/role.mjs';
+import { closeRole, openRole, setRequiredModel } from './runtime/role.mjs';
 import { createInitialRunRecoveryState, createRunRecoveryStore } from './runtime/run-recovery.mjs';
 import { createSparSessionStore } from './runtime/spar-session.mjs';
 import { createStartupProfiler } from './runtime/startup-profile.mjs';
@@ -173,6 +173,9 @@ export function createLoopEngine({ config }) {
   let nextFlowId = 1;
   let nextTraceId = 1;
   let runTrace = null;
+  let changeModelFn = async () => {
+    throw new Error('Spar run has not started.');
+  };
   const sparSessionStore = config.sparSession?.store || createSparSessionStore({ ...(config.sparSession || {}), config });
   const recoveryStore = config.runRecovery?.store || createRunRecoveryStore({ ...(config.runRecovery || {}), config });
   const loadedRecoveryState = recoveryStore.load?.() || null;
@@ -249,6 +252,7 @@ export function createLoopEngine({ config }) {
       { type: 'approvalContinued', ...event },
     ),
     onResult: (result) => publish({ type: 'result', result }, { type: 'result', result }),
+    onModelChange: (event) => publish({ type: 'modelChange', ...event }),
   };
 
   function writeRecovery(nextState) {
@@ -321,6 +325,15 @@ export function createLoopEngine({ config }) {
         recovery: recoveryState.roles?.REVIEWER,
         retiredRoles,
       });
+      changeModelFn = async ({ role, model }) => {
+        const normalizedRole = String(role || '').toUpperCase();
+        const target = normalizedRole === 'AUTHOR' ? authorManager : normalizedRole === 'REVIEWER' ? reviewerManager : null;
+        if (!target) throw new Error(`Unknown role for model change: ${role}`);
+        return target.requestModelChange(model ?? null);
+      };
+      config.changeModel = changeModelFn;
+
+      await startup.requireReady();
 
       result = await runRounds({
         authorManager,
@@ -407,6 +420,7 @@ export function createLoopEngine({ config }) {
       return () => eventListeners.delete(fn);
     },
     run,
+    changeModel: (request) => changeModelFn(request),
   };
 }
 
@@ -667,6 +681,9 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
   bothReadyPromise.catch(() => undefined);
 
   return {
+    async requireReady() {
+      return bothReadyPromise;
+    },
     async getAuthor() {
       return authorPromise;
     },
@@ -721,12 +738,42 @@ function createRoleSessionManager({ role, settings, getInitialRole, openRole: op
   });
 
   return {
-    getForTurn: () => manager.getForTurn(),
+    getForTurn: async () => {
+      const pendingModel = manager.pendingModelChange;
+      if (pendingModel === undefined) return manager.getForTurn();
+      manager.pendingModelChange = undefined;
+      const state = await manager.getForTurn();
+      return applyPendingModelChange({ role, settings, manager, state, model: pendingModel, renderer });
+    },
+    requestModelChange: async (model) => {
+      const normalizedModel = typeof model === 'string' && model.trim() ? model.trim() : null;
+      settings.model = normalizedModel;
+      settings.modelSource = 'runtime';
+      manager.pendingModelChange = normalizedModel;
+      renderer.onModelChange?.({ role, model: normalizedModel, status: 'queued' });
+      return { role, model: normalizedModel, status: 'queued' };
+    },
     recoverForRetry: () => manager.recoverForRetry(),
     getActive: () => manager.getActive(),
     getStartedRoles: () => manager.getStarted(),
     getRecoverySnapshot: () => manager.getRecoverySnapshot(),
   };
+}
+
+async function applyPendingModelChange({ role, settings, manager, state, model, renderer }) {
+  if (model) {
+    renderer.onRoleStatus?.({ role, message: 'switching model to ' + model + '...' });
+    await setRequiredModel({ role, session: state.session, settings });
+    renderer.onModelChange?.({ role, model, status: 'applied' });
+    renderer.onRoleStatus?.({ role, message: 'model switched to ' + model });
+    return state;
+  }
+
+  renderer.onRoleStatus?.({ role, message: 'switching to agent default model...' });
+  const refreshed = await manager.refreshNow();
+  renderer.onModelChange?.({ role, model: null, status: 'applied' });
+  renderer.onRoleStatus?.({ role, message: 'model switched to agent default' });
+  return refreshed;
 }
 
 async function settleApprovedResult({ result, round, hardRoundLimit, continuationLimit, approvalContinuations, roundLimit, config, maxRounds, clearRecovery, updateRecovery, renderer }) {

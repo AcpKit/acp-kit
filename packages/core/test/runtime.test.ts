@@ -114,6 +114,128 @@ describe('AcpRuntime', () => {
     expect(snapshot.session.currentModelId).toBe('gpt-5.4');
   });
 
+  it('keeps collecting late tool continuation updates after prompt resolves', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'session-late-tool' }),
+      prompt: vi.fn(async () => {
+        await capturedClient?.sessionUpdate({
+          sessionId: 'session-late-tool',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-1',
+            toolName: 'Edit',
+            status: 'running',
+            input: { text: 'write file' },
+          },
+        });
+        setTimeout(() => {
+          void capturedClient?.sessionUpdate({
+            sessionId: 'session-late-tool',
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'tool-1',
+              status: 'completed',
+              toolResponse: { text: 'file written' },
+            },
+          });
+          void capturedClient?.sessionUpdate({
+            sessionId: 'session-late-tool',
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done after tool' } },
+          });
+        }, 20);
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory: {
+        create({ client }) {
+          capturedClient = client as typeof capturedClient;
+          return connection as never;
+        },
+      },
+    });
+
+    const session = await runtime.newSession();
+    const events: Array<{ type: string; turnId?: string; delta?: string; status?: string }> = [];
+    session.on('event', (event) => events.push(event));
+
+    await session.prompt('write it');
+
+    const toolStart = events.find((event) => event.type === 'tool.start');
+    const toolEnd = events.find((event) => event.type === 'tool.end');
+    const messageDelta = events.find((event) => event.type === 'message.delta');
+    const completedIndex = events.findIndex((event) => event.type === 'turn.completed');
+
+    expect(toolEnd).toMatchObject({ type: 'tool.end', status: 'completed' });
+    expect(messageDelta).toMatchObject({ type: 'message.delta', delta: 'done after tool' });
+    expect(toolEnd?.turnId).toBe(toolStart?.turnId);
+    expect(messageDelta?.turnId).toBe(toolStart?.turnId);
+    expect(events.findIndex((event) => event.type === 'tool.end')).toBeLessThan(completedIndex);
+    expect(events.findIndex((event) => event.type === 'message.delta')).toBeLessThan(completedIndex);
+    expect(session.getSnapshot().blocks).toEqual([
+      expect.objectContaining({ kind: 'message', content: 'done after tool', completed: true, turnId: toolStart?.turnId }),
+    ]);
+    expect(session.getSnapshot().tools['tool-1']).toMatchObject({ status: 'completed', turnId: toolStart?.turnId });
+
+    await runtime.shutdown();
+  });
+
+  it('does not complete while a prompt-returned tool is still running', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    let completeTool: (() => void) | null = null;
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'session-open-tool' }),
+      prompt: vi.fn(async () => {
+        await capturedClient?.sessionUpdate({
+          sessionId: 'session-open-tool',
+          update: { sessionUpdate: 'tool_call', toolCallId: 'tool-1', toolName: 'Bash', status: 'running' },
+        });
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory: {
+        create({ client }) {
+          capturedClient = client as typeof capturedClient;
+          completeTool = () => {
+            void capturedClient?.sessionUpdate({
+              sessionId: 'session-open-tool',
+              update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed', toolResponse: 'ok' },
+            });
+          };
+          return connection as never;
+        },
+      },
+    });
+
+    const session = await runtime.newSession();
+    let completed = false;
+    const promptPromise = session.prompt('run tool').then(() => { completed = true; });
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(completed).toBe(false);
+    completeTool?.();
+    await promptPromise;
+    expect(session.getSnapshot().tools['tool-1']).toMatchObject({ status: 'completed' });
+
+    await runtime.shutdown();
+  });
+
   it('emits startup observer phases for connect, initialize, and newSession', async () => {
     const startupObserver = {
       mark: vi.fn(),
@@ -1152,6 +1274,39 @@ describe('AcpRuntime', () => {
     });
     const session = await runtime.newSession();
     await session.close();
+    await expect(session.setMode('plan')).rejects.toThrow(/disposed/);
+    await runtime.shutdown();
+  });
+
+  it('session.close falls back to dispose when the agent rejects close as method not found', async () => {
+    const closeError = new Error('"Method not found": session/close') as Error & { code?: number; data?: unknown };
+    closeError.name = 'RequestError';
+    closeError.code = -32601;
+    closeError.data = { method: 'session/close' };
+    const unstable_closeSession = vi.fn().mockRejectedValue(closeError);
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-close-method-missing' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+          unstable_closeSession,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    const session = await runtime.newSession();
+
+    await session.close();
+
+    expect(unstable_closeSession).toHaveBeenCalledWith({ sessionId: 'sess-close-method-missing' });
     await expect(session.setMode('plan')).rejects.toThrow(/disposed/);
     await runtime.shutdown();
   });

@@ -23,6 +23,7 @@ import {
   formatTuiPrimaryFooterKeys,
   formatTuiHelpKeybindings,
   formatTuiSetupFooterKeys,
+  formatTuiRuntimeModelFooterKeys,
   formatTuiConfirmSummaryRows,
   formatSparSplashFrame,
   formatSparBrandFrame,
@@ -51,6 +52,16 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     const helpKeys = help.map(([key]) => key);
 
     expect(helpKeys).toEqual(expect.arrayContaining(['t', 'w', 'g', 'G', 'e', 'v', '[ / ]', 'Enter / d', 'f', '?']));
+  });
+
+
+  it('exposes runtime model switching in help and model footer keys', () => {
+    const help = formatTuiHelpKeybindings();
+    expect(help).toEqual(expect.arrayContaining([
+      ['m', 'Change AUTHOR/REVIEWER model for future turns'],
+    ]));
+    expect(formatTuiRuntimeModelFooterKeys()).toEqual(['Tab', '\u2191/\u2193', 'Enter', 'c', 'Esc', 'q']);
+    expect(formatTuiRuntimeModelFooterKeys({ mode: 'customModel' })).toEqual(['type', 'Enter', 'Esc', 'q']);
   });
 
   it('keeps setup footer minimal and leaves advanced setup actions out of the primary line', () => {

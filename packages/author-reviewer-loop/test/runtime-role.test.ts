@@ -700,4 +700,28 @@ describe('runtime role adapter', () => {
     expect(thrown.errors.map((error: Error) => error.message)).toContain('disk full while persisting transcript');
     expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
   });
+
+  it('does not fail role cleanup when session close is unsupported by the agent', async () => {
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+    mocks.session.close.mockImplementationOnce(async () => {
+      await mocks.session.dispose();
+    });
+
+    await expect(closeRole(state)).resolves.toBeUndefined();
+
+    expect(mocks.session.close).toHaveBeenCalledTimes(1);
+    expect(mocks.session.dispose).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
+  });
 });

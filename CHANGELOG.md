@@ -8,6 +8,16 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-08
+
+### Added
+- `@acp-kit/core` session turn managers now expose `refreshNow()` for callers that need to rotate a role session immediately before the next turn.
+
+### Fixed
+- `@acp-kit/core` local terminal host now runs shell command strings when ACP agents omit `args`, matching Claude Code ACP terminal requests and avoiding false `Interrupted by the user` tool results. Spawn failures now report exit code `127` with an error message instead of an ambiguous missing exit status.
+- `@acp-kit/core` now keeps a prompt turn open briefly after tool-bearing ACP prompts resolve, and waits for still-running tools before emitting `turn.completed`, preventing adapters with late tool continuation updates from being cut off early.
+- `@acp-kit/core` session cleanup now treats ACP `session/close` method-not-found responses as unsupported optional capability and falls back to local disposal instead of failing cleanup.
+
 ## [0.9.0] - 2026-05-04
 
 ### Added

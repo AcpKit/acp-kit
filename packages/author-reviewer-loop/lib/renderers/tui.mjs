@@ -484,6 +484,7 @@ export function formatTuiHelpKeybindings() {
     ['Esc / q', 'Return from tool detail view'],
     ['v', 'View full task text'],
     ['e', 'Edit task text'],
+    ['m', 'Change AUTHOR/REVIEWER model for future turns'],
     ['t', 'Toggle ACP trace view'],
     ['w', 'Toggle soft wrap'],
     ['?', 'Toggle this help'],
@@ -496,6 +497,11 @@ export function formatTuiSetupFooterKeys({ mode = 'summary', taskTruncated = fal
   if (mode === 'customModel') return ['type', 'Enter', 'Esc', 'q'];
   if (mode === 'model') return ['\u2191/\u2193', 'Enter', 'c', 'Esc/b', 'q'];
   return ['Tab', '\u2191/\u2193', 'Space', 'm', 'l', 'Enter', '?', 'q'];
+}
+
+export function formatTuiRuntimeModelFooterKeys({ mode = 'model' } = {}) {
+  if (mode === 'customModel') return ['type', 'Enter', 'Esc', 'q'];
+  return ['Tab', '\u2191/\u2193', 'Enter', 'c', 'Esc', 'q'];
 }
 
 export function formatTuiConfirmSummaryRows(config = {}) {
@@ -1342,6 +1348,60 @@ export async function runTui({ config }) {
     return model ?? '(agent default)';
   }
 
+  function createRuntimeModelState(role = 'author') {
+    const normalizedRole = role === 'reviewer' ? 'reviewer' : 'author';
+    const settings = normalizedRole === 'author' ? config.authorSettings : config.reviewerSettings;
+    const agentId = settings.agentId ?? agentIdByProfileId.get(settings.agent?.id) ?? null;
+    const state = {
+      mode: 'model',
+      activeRole: normalizedRole,
+      cursor: 0,
+      customModelInput: '',
+      error: null,
+      status: null,
+    };
+    const options = runtimeModelOptions(state);
+    const idx = options.findIndex((option) => option.value === settings.model);
+    state.cursor = idx >= 0 ? idx : 0;
+    return state;
+  }
+
+  function runtimeModelOptions(modelState) {
+    const role = modelState.activeRole === 'reviewer' ? 'reviewer' : 'author';
+    const settings = role === 'author' ? config.authorSettings : config.reviewerSettings;
+    const agentId = settings.agentId ?? agentIdByProfileId.get(settings.agent?.id);
+    return modelChoicesForAgent(agentId, settings.model).map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+      value: choice.value,
+      disabled: false,
+    }));
+  }
+
+  function moveRuntimeModelCursor(modelState, delta) {
+    const options = runtimeModelOptions(modelState);
+    if (options.length === 0) return modelState;
+    return { ...modelState, cursor: (modelState.cursor + delta + options.length) % options.length, error: null };
+  }
+
+  function toggleRuntimeModelRole(modelState) {
+    return createRuntimeModelState(modelState.activeRole === 'author' ? 'reviewer' : 'author');
+  }
+
+  function enterRuntimeCustomModelMode(modelState) {
+    const settings = modelState.activeRole === 'author' ? config.authorSettings : config.reviewerSettings;
+    return { ...modelState, mode: 'customModel', customModelInput: settings.model ?? '', cursor: 0, error: null, status: null };
+  }
+
+  function appendRuntimeCustomModelInput(modelState, input) {
+    if (!input || /[\r\n\t]/.test(input)) return modelState;
+    return { ...modelState, customModelInput: `${modelState.customModelInput ?? ''}${input}`, error: null };
+  }
+
+  function backspaceRuntimeCustomModelInput(modelState) {
+    return { ...modelState, customModelInput: String(modelState.customModelInput ?? '').slice(0, -1), error: null };
+  }
+
   function setupSourceLabel(setup, role) {
     const settings = role === 'author' ? config.authorSettings : config.reviewerSettings;
     if (settings.agentSource === 'env' || settings.modelSource === 'env') return 'env lock';
@@ -1406,8 +1466,9 @@ export async function runTui({ config }) {
     selected: null,    // round number currently focused
     follow: true,      // auto-jump to latest round
     focus: 'AUTHOR',   // which pane is active for scrolling
-    screen: 'flow',     // flow | trace | tool | taskConfirm | finishing
+    screen: 'flow',     // flow | trace | tool | taskConfirm | model | finishing
     setup: initialSetup,
+    runtimeModel: createRuntimeModelState('author'),
     awaitingRecoveryConfirm: Boolean(pendingRunRecovery),
     awaitingSetup: !config.skipConfirm || initialSetup.required,
     selectedTool: null, // { round, role, toolCallId } used by the tool detail view
@@ -1536,6 +1597,24 @@ export async function runTui({ config }) {
         return { ...s, screen: s.screen === 'trace' ? 'flow' : 'trace', scrollTrace: 0 };
       case 'showError':
         return { ...s, screen: s.screen === 'error' ? 'flow' : 'error', scrollError: 0 };
+      case 'openRuntimeModel':
+        return { ...s, screen: 'model', runtimeModel: createRuntimeModelState(s.focus === 'REVIEWER' ? 'reviewer' : 'author') };
+      case 'closeRuntimeModel':
+        return { ...s, screen: 'flow', runtimeModel: { ...s.runtimeModel, error: null, status: null } };
+      case 'runtimeModelMove':
+        return { ...s, runtimeModel: moveRuntimeModelCursor(s.runtimeModel, a.delta) };
+      case 'runtimeModelToggleRole':
+        return { ...s, runtimeModel: toggleRuntimeModelRole(s.runtimeModel) };
+      case 'runtimeModelCustomMode':
+        return { ...s, runtimeModel: enterRuntimeCustomModelMode(s.runtimeModel) };
+      case 'runtimeModelCustomAppend':
+        return { ...s, runtimeModel: appendRuntimeCustomModelInput(s.runtimeModel, a.input) };
+      case 'runtimeModelCustomBackspace':
+        return { ...s, runtimeModel: backspaceRuntimeCustomModelInput(s.runtimeModel) };
+      case 'runtimeModelStatus':
+        return { ...s, runtimeModel: { ...s.runtimeModel, mode: 'model', status: a.status, error: null } };
+      case 'runtimeModelError':
+        return { ...s, runtimeModel: { ...s.runtimeModel, error: a.error, status: null } };
       case 'selectTool':
         return { ...s, selectedTool: a.tool };
       case 'openTool':
@@ -1603,7 +1682,7 @@ export async function runTui({ config }) {
     if (action.type === 'traceEntry') return viewState.screen === 'trace';
     if (viewState.awaitingRecoveryConfirm || viewState.awaitingSetup || viewState.awaitingConfirm || viewState.editingTask || viewState.cancelled) return false;
     if (viewState.screen === 'trace') return false;
-    if (viewState.screen === 'task' || viewState.screen === 'taskConfirm' || viewState.screen === 'error' || viewState.screen === 'finishing') return false;
+    if (viewState.screen === 'task' || viewState.screen === 'taskConfirm' || viewState.screen === 'model' || viewState.screen === 'error' || viewState.screen === 'finishing') return false;
 
     const latestRound = nextState?.order?.[nextState.order.length - 1] ?? null;
     const visibleRound = viewState.follow ? latestRound : (viewState.selected ?? latestRound);
@@ -1943,6 +2022,56 @@ export async function runTui({ config }) {
         return;
       }
 
+      const applyRuntimeModelSelection = (model) => {
+        const roleKey = view.runtimeModel.activeRole === 'reviewer' ? 'reviewer' : 'author';
+        const role = roleKey === 'author' ? 'AUTHOR' : 'REVIEWER';
+        const settings = roleKey === 'author' ? config.authorSettings : config.reviewerSettings;
+        const normalizedModel = typeof model === 'string' && model.trim() ? model.trim() : null;
+        try {
+          Promise.resolve(ensureEngine().changeModel({ role, model: normalizedModel })).catch((error) => {
+            dispatchView({ type: 'runtimeModelError', error: error instanceof Error ? error.message : String(error) });
+            setTick((t) => (t + 1) | 0);
+          });
+          dispatchView({
+            type: 'runtimeModelStatus',
+            status: normalizedModel ? 'Queued ' + role + ' model: ' + normalizedModel : 'Queued ' + role + ' model: agent default',
+          });
+          setTick((t) => (t + 1) | 0);
+        } catch (error) {
+          dispatchView({ type: 'runtimeModelError', error: error instanceof Error ? error.message : String(error) });
+        }
+      };
+
+      if (view.screen === 'model') {
+        if (view.runtimeModel.mode === 'customModel') {
+          if (key.return) {
+            applyRuntimeModelSelection(String(view.runtimeModel.customModelInput ?? '').trim() || null);
+          } else if (key.escape) {
+            dispatchView({ type: 'runtimeModelStatus', status: null });
+          } else if (key.backspace || key.delete) {
+            dispatchView({ type: 'runtimeModelCustomBackspace' });
+          } else if (input === 'q' && !view.runtimeModel.customModelInput) {
+            dispatchView({ type: 'closeRuntimeModel' });
+          } else {
+            dispatchView({ type: 'runtimeModelCustomAppend', input });
+          }
+        } else if (key.upArrow || input === 'k') {
+          dispatchView({ type: 'runtimeModelMove', delta: -1 });
+        } else if (key.downArrow || input === 'j') {
+          dispatchView({ type: 'runtimeModelMove', delta: 1 });
+        } else if (key.tab || input === '\t') {
+          dispatchView({ type: 'runtimeModelToggleRole' });
+        } else if (input === 'c' || input === 'C') {
+          dispatchView({ type: 'runtimeModelCustomMode' });
+        } else if (key.return || input === ' ') {
+          const option = runtimeModelOptions(view.runtimeModel)[view.runtimeModel.cursor];
+          if (option) applyRuntimeModelSelection(option.value);
+        } else if (key.escape || input === 'q') {
+          dispatchView({ type: 'closeRuntimeModel' });
+        }
+        return;
+      }
+
       if (view.awaitingSetup) {
         if (view.setup.mode === 'summary') {
           if (key.return) {
@@ -2061,6 +2190,7 @@ export async function runTui({ config }) {
       else if (input === 'k')   dispatchView({ type: 'scroll', delta: 1 });
       else if (input === 'j')   dispatchView({ type: 'scroll', delta: -1 });
       else if (key.tab || input === '\t') dispatchView({ type: 'toggleFocus' });
+      else if ((input === 'm' || input === 'M') && state.phase === Phase.Running) dispatchView({ type: 'openRuntimeModel' });
       else if (input === 't')   dispatchView({ type: 'toggleTrace' });
       else if (input === '[')   dispatchView({ type: 'selectTool', tool: moveToolSelection(-1) });
       else if (input === ']' || input === '/')   dispatchView({ type: 'selectTool', tool: moveToolSelection(1) });
@@ -3054,6 +3184,67 @@ export async function runTui({ config }) {
         ),
       );
     }
+
+    if (view.screen === 'model') {
+      const modelState = view.runtimeModel;
+      const roleKey = modelState.activeRole === 'reviewer' ? 'reviewer' : 'author';
+      const role = roleKey === 'author' ? 'AUTHOR' : 'REVIEWER';
+      const settings = roleKey === 'author' ? config.authorSettings : config.reviewerSettings;
+      const agentId = settings.agentId ?? agentIdByProfileId.get(settings.agent?.id);
+      const options = runtimeModelOptions(modelState);
+      const bodyBudget = Math.max(0, size.rows - 13);
+    return h(
+      Box,
+      {
+        flexDirection: 'column',
+        width: size.cols,
+        height: size.rows,
+        overflow: 'hidden',
+      },
+      h(
+        Box,
+        {
+          flexDirection: 'column',
+          borderStyle: 'double',
+          borderColor: 'cyan',
+          paddingX: 2,
+          paddingY: 1,
+          width: size.cols,
+          height: size.rows,
+          overflow: 'hidden',
+        },
+        h(Text, { bold: true, color: 'cyan' }, modelState.mode === 'customModel' ? 'Custom Runtime Model' : 'Change Runtime Model'),
+        h(Text, { dimColor: true, wrap: 'truncate-end' }, 'Applies before the next turn for the selected role.'),
+        h(Text, null, ''),
+        h(Text, { color: 'yellow', wrap: 'truncate-end' }, role + ' · ' + agentDisplayName(agentId) + ' · current model: ' + (settings.model || '(agent default)')),
+        h(Text, null, ''),
+        modelState.mode === 'customModel'
+          ? h(Text, { key: 'runtime-custom-help', dimColor: true, wrap: 'truncate-end' }, 'Enter a model id, or leave empty to use the agent default.')
+          : h(Text, { key: 'runtime-models-header', dimColor: true }, padCell('Model', 32) + ' Applies to ' + role),
+        ...(modelState.mode === 'customModel'
+          ? [h(Text, { key: 'runtime-custom-input', color: 'green', wrap: 'truncate-end' }, '> ' + (modelState.customModelInput ?? '') + '_')]
+          : options.slice(0, bodyBudget).map((option, i) => h(
+            Text,
+            {
+              key: option.id,
+              color: i === modelState.cursor ? 'green' : undefined,
+              inverse: i === modelState.cursor,
+              wrap: 'truncate-end',
+            },
+            (i === modelState.cursor ? '> ' : '  ') + option.label,
+          ))),
+        h(Text, null, ''),
+        modelState.error
+          ? h(Text, { color: 'red', wrap: 'wrap' }, modelState.error)
+          : h(Text, { dimColor: true, wrap: 'truncate-end' }, modelState.status || 'Concrete models are set on the active session; agent default opens a fresh role session.'),
+        h(Text, null, ...formatTuiRuntimeModelFooterKeys({ mode: modelState.mode }).flatMap((key, index) => [
+          index === 0 ? null : '   ',
+          shortcutLabel(key, key === 'q' ? 'red' : 'cyan'),
+        ]).filter(Boolean)),
+      ),
+    );
+    }
+
 
     if (view.screen === 'taskConfirm') {
       const confirmCols = Math.max(20, size.cols - 10);

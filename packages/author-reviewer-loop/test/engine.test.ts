@@ -17,6 +17,9 @@ vi.mock('node:fs/promises', () => ({
 vi.mock('../lib/runtime/role.mjs', () => ({
   openRole: mocks.openRole,
   closeRole: mocks.closeRole,
+  setRequiredModel: async ({ session, settings }: { session: { setModel?: (model: string) => Promise<void> }; settings: { model: string } }) => {
+    await session.setModel?.(settings.model);
+  },
 }));
 
 vi.mock('../lib/runtime/turn.mjs', () => ({
@@ -106,6 +109,58 @@ describe('author-reviewer-loop engine', () => {
     expect(reviewerTurns).toEqual([reviewerStates[0], reviewerStates[1], reviewerStates[2]]);
     expect(mocks.closeRole).toHaveBeenCalledWith(authorStates[0]);
     expect(mocks.closeRole).toHaveBeenCalledWith(reviewerStates[0]);
+  });
+
+  it('applies a runtime model change before the next selected role turn', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session', setModel: vi.fn().mockResolvedValue(undefined) } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = config(2);
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) => {
+      if (role === 'AUTHOR' && round === 1) {
+        await cfg.changeModel?.({ role: 'AUTHOR', model: 'next-author-model' });
+        return 'draft';
+      }
+      return role === 'REVIEWER' ? 'SPAR_VERDICT: REJECTED' : 'draft 2';
+    });
+
+    await createLoopEngine({ config: cfg }).run();
+
+    const authorTurns = mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR');
+    expect(authorTurns).toHaveLength(2);
+    expect(authorState.session.setModel).toHaveBeenCalledWith('next-author-model');
+    expect(mocks.runTurn.mock.calls.map(([arg]) => arg.role)).toEqual(['AUTHOR', 'REVIEWER', 'AUTHOR', 'REVIEWER']);
+    expect(cfg.authorSettings.model).toBe('next-author-model');
+  });
+
+  it('refreshes a role session when runtime model change selects the agent default', async () => {
+    const authorStates = [
+      { role: 'AUTHOR', session: { id: 'author-session-1' } },
+      { role: 'AUTHOR', session: { id: 'author-session-default' } },
+    ];
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    let authorIndex = 0;
+    const cfg = config(2);
+    cfg.authorSettings.model = 'initial-model';
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorStates[authorIndex++]! : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) => {
+      if (role === 'AUTHOR' && round === 1) {
+        await cfg.changeModel?.({ role: 'AUTHOR', model: null });
+        return 'draft';
+      }
+      return role === 'REVIEWER' ? 'SPAR_VERDICT: REJECTED' : 'draft 2';
+    });
+
+    await createLoopEngine({ config: cfg }).run();
+
+    const authorTurns = mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR').map(([arg]) => arg.state);
+    expect(authorTurns).toEqual([authorStates[0], authorStates[1]]);
+    expect(mocks.closeRole).toHaveBeenCalledWith(authorStates[0]);
+    expect(cfg.authorSettings.model).toBeNull();
   });
 
   it('only treats APPROVED on its own line as approval', async () => {
@@ -687,39 +742,35 @@ describe('author-reviewer-loop engine', () => {
     }));
   });
 
-  it('starts the author turn before waiting for the reviewer role to finish launching', async () => {
+  it('waits for reviewer startup preflight before starting the first author turn', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     let resolveReviewer: ((state: typeof reviewerState) => void) | undefined;
     const reviewerReady = new Promise<typeof reviewerState>((resolve) => {
       resolveReviewer = resolve;
     });
-    const authorTurnStarted = new Promise<void>((resolve) => {
-      mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
-        if (role === 'AUTHOR') {
-          resolve();
-          return 'draft';
-        }
-        return 'APPROVED';
-      });
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+      if (role === 'AUTHOR') return 'draft';
+      return 'SPAR_VERDICT: APPROVED';
     });
     mocks.openRole.mockImplementation(({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
       role === 'AUTHOR' ? Promise.resolve(authorState) : reviewerReady,
     );
 
     const runPromise = createLoopEngine({ config: config(1) }).run();
-    await authorTurnStarted;
+    await Promise.resolve();
 
-    expect(mocks.runTurn.mock.calls[0]?.[0]).toMatchObject({ role: 'AUTHOR', state: authorState });
-    expect(mocks.runTurn.mock.calls.some(([arg]) => arg.role === 'REVIEWER')).toBe(false);
+    expect(mocks.runTurn).not.toHaveBeenCalled();
 
     resolveReviewer?.(reviewerState);
     await expect(runPromise).resolves.toMatchObject({ approved: true, rounds: 1 });
+    expect(mocks.runTurn.mock.calls[0]?.[0]).toMatchObject({ role: 'AUTHOR', state: authorState });
+    expect(mocks.runTurn.mock.calls[1]?.[0]).toMatchObject({ role: 'REVIEWER', state: reviewerState });
     expect(mocks.closeRole).toHaveBeenCalledWith(authorState);
     expect(mocks.closeRole).toHaveBeenCalledWith(reviewerState);
   });
 
-  it('runs the author turn before surfacing a reviewer startup or model setup failure', async () => {
+  it('fails before the first author turn when reviewer startup or model setup fails', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerError = new Error('REVIEWER_MODEL="bad" is not available');
     reviewerError.name = 'ConfigurationError';
@@ -732,8 +783,7 @@ describe('author-reviewer-loop engine', () => {
     await expect(createLoopEngine({ config: config(1) }).run()).rejects.toThrow('not available');
 
     expect(mocks.openRole).toHaveBeenCalledTimes(2);
-    expect(mocks.runTurn).toHaveBeenCalledTimes(1);
-    expect(mocks.runTurn.mock.calls[0]?.[0]).toMatchObject({ role: 'AUTHOR', state: authorState });
+    expect(mocks.runTurn).not.toHaveBeenCalled();
     expect(mocks.closeRole).toHaveBeenCalledWith(authorState);
   });
 
@@ -784,24 +834,20 @@ describe('author-reviewer-loop engine', () => {
     expect(mocks.closeRole).toHaveBeenCalledWith(reviewerState);
   });
 
-  it('closes a reviewer that settles after started roles are collected during failure cleanup', async () => {
+  it('closes both preflighted roles when the first author turn fails', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
-    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session-late-during-cleanup' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     const authorTurnError = new Error('author crashed after starting work');
-    let resolveReviewer: ((state: typeof reviewerState) => void) | undefined;
     let releaseAuthorClose: (() => void) | undefined;
-    const reviewerReady = new Promise<typeof reviewerState>((resolve) => {
-      resolveReviewer = resolve;
-    });
     const authorCloseBlocked = new Promise<void>((resolve) => {
       releaseAuthorClose = resolve;
     });
     mocks.openRole.mockImplementation(({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
-      role === 'AUTHOR' ? Promise.resolve(authorState) : reviewerReady,
+      role === 'AUTHOR' ? Promise.resolve(authorState) : Promise.resolve(reviewerState),
     );
     mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
       if (role === 'AUTHOR') throw authorTurnError;
-      return 'APPROVED';
+      return 'SPAR_VERDICT: APPROVED';
     });
     mocks.closeRole.mockImplementation(async (state: { role: string }) => {
       if (state === authorState) await authorCloseBlocked;
@@ -811,14 +857,10 @@ describe('author-reviewer-loop engine', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(mocks.closeRole).toHaveBeenCalledWith(authorState);
-    expect(mocks.closeRole).not.toHaveBeenCalledWith(reviewerState);
-
-    resolveReviewer?.(reviewerState);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.closeRole).toHaveBeenCalledWith(reviewerState);
     releaseAuthorClose?.();
 
     await expect(runPromise).rejects.toThrow('author crashed after starting work');
-    expect(mocks.closeRole).toHaveBeenCalledWith(reviewerState);
   });
 
   it('records a normal engine error when workspace creation fails before launch', async () => {

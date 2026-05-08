@@ -23,6 +23,14 @@ function hasAcpCancellationCode(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === -32800);
 }
 
+function isAcpMethodNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === -32601) return true;
+  const message = String((error as { message?: unknown }).message ?? '').toLowerCase();
+  return message.includes('method not found');
+}
+
 function newId(): string {
   // Web Crypto is available in Node >=19 and every modern browser/Webview.
   const c: { randomUUID?: () => string } | undefined = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -96,6 +104,9 @@ export interface PromptResult {
 
 type Listener = (event: RuntimeSessionEvent) => void;
 
+const PROMPT_TAIL_TOOL_QUIET_MS = 150;
+const PROMPT_TAIL_TOOL_MAX_MS = 3_000;
+
 interface RuntimeSessionOptions {
   sessionId: string;
   agent: AgentProfile;
@@ -120,6 +131,8 @@ export class RuntimeSession {
   private currentMessageId: string | null = null;
   private currentReasoningId: string | null = null;
   private cancelling = false;
+  private currentTurnRuntimeEventCount = 0;
+  private currentTurnToolEventSeen = false;
 
   constructor(options: RuntimeSessionOptions) {
     this.sessionId = options.sessionId;
@@ -216,6 +229,8 @@ export class RuntimeSession {
     this.currentMessageId = null;
     this.currentReasoningId = null;
     this.cancelling = false;
+    this.currentTurnRuntimeEventCount = 0;
+    this.currentTurnToolEventSeen = false;
     this.emitEvent({
       type: 'turn.started',
       sessionId: this.sessionId,
@@ -229,6 +244,7 @@ export class RuntimeSession {
         sessionId: this.sessionId,
         prompt: [{ type: 'text', text }],
       });
+      await this.waitForPromptTailQuiescence();
       this.flushPendingStreams();
       const stopReason = typeof response?.stopReason === 'string' ? response.stopReason : null;
       if (response?.usage) {
@@ -346,6 +362,10 @@ export class RuntimeSession {
       try {
         await this.connection.unstable_closeSession({ sessionId: this.sessionId });
       } catch (error) {
+        if (isAcpMethodNotFound(error)) {
+          await this.dispose();
+          return;
+        }
         // Bubble up the error so the caller can decide how to react, but still
         // dispose locally so we don't leak the session slot.
         await this.dispose();
@@ -416,7 +436,34 @@ export class RuntimeSession {
 
   private emitRuntimeEvent(event: RuntimeEvent): void {
     applyRuntimeEvent(this.transcriptState, event);
+    if (this.currentTurnId) {
+      this.currentTurnRuntimeEventCount += 1;
+      if (event.type === 'tool.start' || event.type === 'tool.update' || event.type === 'tool.end') {
+        this.currentTurnToolEventSeen = true;
+      }
+    }
     this.emitEvent(event);
+  }
+
+  private async waitForPromptTailQuiescence(): Promise<void> {
+    const turnId = this.currentTurnId;
+    if (!turnId) return;
+    if (this.currentTurnId !== turnId || !this.currentTurnToolEventSeen) return;
+
+    const deadline = Date.now() + PROMPT_TAIL_TOOL_MAX_MS;
+    let seenEvents = this.currentTurnRuntimeEventCount;
+    while (Date.now() < deadline) {
+      await delay(Math.min(PROMPT_TAIL_TOOL_QUIET_MS, Math.max(0, deadline - Date.now())));
+      if (this.currentTurnId !== turnId) return;
+      if (this.currentTurnRuntimeEventCount === seenEvents && !this.hasOpenCurrentTurnTools(turnId)) return;
+      seenEvents = this.currentTurnRuntimeEventCount;
+    }
+  }
+
+  private hasOpenCurrentTurnTools(turnId: string): boolean {
+    return Object.values(this.transcriptState.tools).some((tool) => (
+      tool.turnId === turnId && (tool.status === 'pending' || tool.status === 'running')
+    ));
   }
 
   private emitEvent(event: RuntimeSessionEvent): void {
@@ -436,6 +483,8 @@ export class RuntimeSession {
     this.currentMessageId = null;
     this.currentReasoningId = null;
     this.cancelling = false;
+    this.currentTurnRuntimeEventCount = 0;
+    this.currentTurnToolEventSeen = false;
   }
 
   private setStatus(status: SessionStatus): void {
@@ -452,6 +501,10 @@ export class RuntimeSession {
       previousStatus,
     });
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function createInitialSessionEvents(params: {

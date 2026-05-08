@@ -177,6 +177,57 @@ describe('collectTurnResult', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('keeps the subscription active until RuntimeSession emits late turn.completed', async () => {
+    vi.useFakeTimers();
+    let handlers: RuntimeEventHandlers<RuntimeSessionEvent> | null = null;
+    const unsubscribe = vi.fn(() => { handlers = null; });
+    const session = {
+      on(nextHandlers: RuntimeEventHandlers<RuntimeSessionEvent>) {
+        handlers = nextHandlers;
+        return unsubscribe;
+      },
+      async prompt() {
+        handlers?.toolStart?.({
+          type: 'tool.start',
+          sessionId: 's1',
+          at: 1,
+          turnId: 'turn1',
+          toolCallId: 'tool-1',
+          name: 'Edit',
+          status: 'running',
+        });
+        setTimeout(() => {
+          handlers?.toolEnd?.({
+            type: 'tool.end',
+            sessionId: 's1',
+            at: 2,
+            turnId: 'turn1',
+            toolCallId: 'tool-1',
+            status: 'completed',
+            output: { text: 'ok' },
+          });
+          handlers?.messageDelta?.({ type: 'message.delta', sessionId: 's1', at: 3, turnId: 'turn1', messageId: 'm1', delta: 'final' });
+          handlers?.turnCompleted?.({ type: 'turn.completed', sessionId: 's1', at: 4, turnId: 'turn1', stopReason: 'end_turn' });
+        }, 20);
+        await vi.advanceTimersByTimeAsync(20);
+        return { stopReason: 'end_turn', usage: null };
+      },
+    };
+
+    try {
+      const result = await collectTurnResult(session as never, 'review');
+
+      expect(result.text).toBe('final');
+      expect(result.tools).toEqual([
+        { id: 'tool-1', tag: '#1', name: 'Edit', status: 'completed', inputChars: 0, outputChars: 2 },
+      ]);
+      expect(result.status).toBe('completed');
+      expect(unsubscribe).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('unsubscribes when the prompt fails', async () => {
     const error = new Error('boom');
     const { session, unsubscribe } = createSession([

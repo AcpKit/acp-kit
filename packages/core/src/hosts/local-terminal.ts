@@ -111,11 +111,13 @@ export function createLocalTerminalHost(options: LocalTerminalHostOptions = {}):
     async createTerminal(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
       const id = `term_${nextId++}`;
       const cwd = resolveCwd(params.cwd ?? undefined);
-      const child = spawn(params.command, params.args ?? [], {
+      const args = params.args ?? [];
+      const shell = params.args === undefined;
+      const child = spawn(params.command, args, {
         cwd,
         env: { ...env, ...resolveEnvOverrides(params.env) },
         stdio: ['pipe', 'pipe', 'pipe'],
-        shell: false,
+        shell,
       });
 
       const record: TerminalRecord = {
@@ -139,7 +141,10 @@ export function createLocalTerminalHost(options: LocalTerminalHostOptions = {}):
           resolveExit();
         };
         child.on('close', (code, signal) => finalize(code, signal));
-        child.on('error', () => finalize(null, null));
+        child.on('error', (error) => {
+          appendOutput(record, Buffer.from(`Failed to start terminal command: ${error.message}\n`));
+          finalize(127, null);
+        });
       });
 
       child.stdout?.on('data', (chunk: Buffer) => appendOutput(record, chunk));

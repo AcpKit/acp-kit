@@ -13,6 +13,7 @@ export interface SessionTurnManagerOptions<TState> {
 export interface SessionTurnManager<TState> {
   getForTurn(): Promise<TState>;
   recoverForRetry(): Promise<TState>;
+  refreshNow(): Promise<TState>;
   getActive(): TState | null;
   getStarted(): TState[];
   getRecoverySnapshot(): { sessionId: string; turnsOnActiveSession: number } | null;
@@ -79,6 +80,10 @@ export function createSessionTurnManager<TState>(options: SessionTurnManagerOpti
       return active as TState;
     },
     recoverForRetry,
+    async refreshNow() {
+      await refresh();
+      return active as TState;
+    },
     getActive() {
       return active;
     },

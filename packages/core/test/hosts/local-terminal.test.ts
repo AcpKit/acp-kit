@@ -34,11 +34,38 @@ describe('createLocalTerminalHost', () => {
     await host.releaseTerminal({ sessionId: 's', terminalId: created.terminalId });
   });
 
+  it('runs shell command strings when args are omitted', async () => {
+    const host = createLocalTerminalHost({ resolveCwd: () => cwd });
+    const command = isWindows ? 'cd && echo hello' : 'pwd && echo hello';
+    const created = await host.createTerminal({ sessionId: 's', command });
+    const exit = await host.waitForTerminalExit({ sessionId: 's', terminalId: created.terminalId });
+    const out = await host.terminalOutput({ sessionId: 's', terminalId: created.terminalId });
+    expect(exit.exitCode).toBe(0);
+    expect(out.output).toContain(cwd);
+    expect(out.output).toMatch(/hello/);
+    await host.releaseTerminal({ sessionId: 's', terminalId: created.terminalId });
+  });
+
   it('captures non-zero exit code', async () => {
     const host = createLocalTerminalHost({ resolveCwd: () => cwd });
     const created = await host.createTerminal({ sessionId: 's', command: failCommand, args: failArgs });
     const exit = await host.waitForTerminalExit({ sessionId: 's', terminalId: created.terminalId });
     expect(exit.exitCode).toBe(7);
+  });
+
+  it('reports spawn failures as command failures with output', async () => {
+    const host = createLocalTerminalHost({ resolveCwd: () => cwd });
+    const created = await host.createTerminal({
+      sessionId: 's',
+      command: 'acp-kit-definitely-missing-terminal-command',
+      args: [],
+    });
+    const exit = await host.waitForTerminalExit({ sessionId: 's', terminalId: created.terminalId });
+    const out = await host.terminalOutput({ sessionId: 's', terminalId: created.terminalId });
+    expect(exit.exitCode).toBe(127);
+    expect(out.output).toMatch(/Failed to start terminal command/);
+    expect((out as typeof out & { exitStatus?: { exitCode?: number } }).exitStatus?.exitCode).toBe(127);
+    await host.releaseTerminal({ sessionId: 's', terminalId: created.terminalId });
   });
 
   it('kills a long-running terminal', { timeout: 15000 }, async () => {

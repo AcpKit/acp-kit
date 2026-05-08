@@ -76,6 +76,24 @@ describe('session turn manager', () => {
     expect(onCloseError).toHaveBeenCalledWith(closeError, first);
   });
 
+
+  it('refreshes immediately when requested manually', async () => {
+    const close = vi.fn();
+    const opened = [state('fresh-1'), state('manual-refresh')];
+    const manager = createSessionTurnManager({
+      open: vi.fn(async () => opened.shift()!),
+      close,
+      maxTurns: 20,
+    });
+
+    const first = await manager.getForTurn();
+    const refreshed = await manager.refreshNow();
+
+    expect(refreshed.session.sessionId).toBe('manual-refresh');
+    expect(close).toHaveBeenCalledWith(first);
+    expect(manager.getRecoverySnapshot()).toEqual({ sessionId: 'manual-refresh', turnsOnActiveSession: 0 });
+  });
+
   it('normalizes invalid turn budgets to the default', () => {
     expect(normalizeSessionTurnLimit(3)).toBe(3);
     expect(normalizeSessionTurnLimit(0)).toBe(20);

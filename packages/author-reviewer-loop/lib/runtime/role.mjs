@@ -198,7 +198,7 @@ function resolveTerminalCwd(root, requestedCwd) {
   return resolvedCwd;
 }
 
-async function setRequiredModel({ role, session, settings }) {
+export async function setRequiredModel({ role, session, settings }) {
   const models = getAvailableModels(session);
   if (models.length > 0 && !models.some((model) => model.id === settings.model)) {
     throw createConfigurationError(formatUnavailableModelError({ role, settings, models }));

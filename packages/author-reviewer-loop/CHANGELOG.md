@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-08
+
+### Added
+
+- Spar TUI can now queue AUTHOR or REVIEWER model changes during a run; concrete models apply before that role's next turn, and selecting the agent default refreshes that role session.
+
+### Fixed
+
+- Spar now waits for both AUTHOR and REVIEWER startup preflight, including model setup, before starting the first AUTHOR turn so reviewer model configuration errors fail before any workspace work begins.
+- Spar now inherits the `@acp-kit/core` terminal compatibility fix for Claude Code ACP, so shell command strings run correctly instead of being misreported as `Interrupted by the user`.
+- Spar no longer hands off to REVIEWER just because an AUTHOR ACP prompt returned after starting a tool call; core now waits for late tool continuation updates and open tools before completing the turn.
+- Spar cleanup no longer fails the run when an agent rejects optional ACP `session/close` with method-not-found; core falls back to local session disposal.
+
 ## [0.9.0] - 2026-05-04
 
 ### Added
