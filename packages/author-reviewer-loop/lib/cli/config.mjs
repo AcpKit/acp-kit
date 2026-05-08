@@ -15,6 +15,7 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
     .name('spar')
     .description('Run split-context AUTHOR and REVIEWER ACP agents over one workspace.')
     .usage('<cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]')
+    .addHelpText('beforeAll', 'Commands:\n  spar update agents [all|codex|claude|copilot]  install/update global code agents\n\n')
     .argument('[cwd]', 'workspace directory')
     .argument('[task...]', 'task text, or a relative/absolute path to a UTF-8 task file')
     .option('-y, --yes', 'skip confirmation prompt')
@@ -26,6 +27,21 @@ export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
     .option('--quality <quality>', 'quality level: prod|dev')
     .version(readPackageVersion(), '-v, --version', 'output the current version')
     .addHelpText('after', `
+Task input:
+  <task-or-task-file...> may be inline task text or one path to a UTF-8 task file.
+  Relative task file paths are resolved from <cwd>; otherwise all parts are joined as text.
+
+TUI keys:
+  ? help      e edit task      v view task      m change model
+  Tab focus   ↑/↓ scroll       [/] rounds       Enter/d tool details
+  t trace     w wrap           q quit
+
+Updates:
+  spar update agents          install/update Copilot, Codex, Claude Code, and cached ACP packages
+  spar update agents copilot  install/update GitHub Copilot ACP language server only
+  spar update agents codex    install/update Codex and codex-acp only
+  spar update agents claude   install/update Claude Code and claude-code-acp only
+
 Environment:
   AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   TUI: no built-in default; CLI default: ${defaults.authorAgent}
   AUTHOR_MODEL=<model-id>                                  TUI: chosen per agent; CLI default: ${defaults.authorModel}
@@ -40,7 +56,9 @@ Environment:
   ACP_REVIEW_CLI=1                                          use the plain line-based renderer
   ACP_REVIEW_TUI=1                                          use the Ink TUI renderer (default)
   ACP_REVIEW_TRACE=1                                        print inspector trace on startup failures
+  ACP_REVIEW_DEBUG_USAGE=1                                  print raw ACP usage updates to stderr
   SPAR_REAL_WORKSPACE=0                                     explicitly disable real-workspace defaults
+  SPAR_NO_UPDATE_CHECK=1                                    skip Spar npm update check
   ACP_REVIEW_EDITOR_TIMEOUT_MS=<ms>                         TUI task editor timeout (default: 1800000)
 `)
     .action((cwdArg, taskParts) => {

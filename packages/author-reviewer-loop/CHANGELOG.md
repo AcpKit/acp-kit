@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-09
+
+### Added
+
+- Added `spar update agents`, which updates Codex and Claude Code global CLIs while refreshing Copilot, Codex ACP, and Claude Code ACP packages in Spar's `~/.acp-kit/agent-bin-cache` fallback cache.
+
+### Changed
+
+- `spar --help` now documents task-file handling, common TUI keys, update-agent commands, and debug/update environment variables.
+
 ## [0.10.0] - 2026-05-08
 
 ### Added

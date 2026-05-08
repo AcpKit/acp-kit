@@ -72,11 +72,19 @@ describe('author-reviewer-loop CLI config', () => {
     });
 
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('spar update agents');
     expect(result.stdout).toContain('Usage: spar <cwd> <task-or-task-file...> [--yes] [--cli] [--quality prod|dev]');
     expect(result.stdout).toContain('-v, --version');
     expect(result.stdout).toContain('--doctor');
     expect(result.stdout).toContain('--danger-ignore-approval');
     expect(result.stdout).toContain('--no-real-workspace');
+    expect(result.stdout).toContain('Task input:');
+    expect(result.stdout).toContain('TUI keys:');
+    expect(result.stdout).toContain('Updates:');
+    expect(result.stdout).toContain('spar update agents copilot');
+    expect(result.stdout).toContain('m change model');
+    expect(result.stdout).toContain('ACP_REVIEW_DEBUG_USAGE=1');
+    expect(result.stdout).toContain('SPAR_NO_UPDATE_CHECK=1');
     expect(result.stderr).toBe('');
   });
 
